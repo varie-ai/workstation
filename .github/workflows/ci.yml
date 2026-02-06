@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'plugin/**'
+      - 'native/**'
+      - 'tests/**'
+      - 'package.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'plugin/**'
+      - 'native/**'
+      - 'tests/**'
+      - 'package.json'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify plugin scripts are executable
+        run: |
+          test -x plugin/scripts/ensure-workstation-running
+          test -x plugin/scripts/install-workstation
+          test -x plugin/scripts/workstation-notify
+          test -x plugin/scripts/workstation-dispatch
+          echo "All plugin scripts are executable"
+
+      - name: Verify hooks.json is valid JSON
+        run: python3 -c "import json; json.load(open('plugin/hooks/hooks.json'))"

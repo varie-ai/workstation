@@ -1,0 +1,159 @@
+#!/bin/bash
+# install-workstation — Download and install the Varie Workstation app
+#
+# Usage:
+#   install-workstation              # Auto-detect platform, install silently
+#   install-workstation --verbose    # Show progress output
+#
+# Called by:
+#   - ensure-workstation-running (background, on first session)
+#   - Manual installation
+
+set -e
+
+REPO="varie-ai/workstation"
+STATE_DIR="$HOME/.varie"
+LOCK_FILE="$STATE_DIR/.installing-workstation"
+
+VERBOSE=""
+if [[ "$1" == "--verbose" ]]; then
+  VERBOSE="1"
+fi
+
+log() {
+  if [[ -n "$VERBOSE" ]]; then
+    echo "$@"
+  fi
+}
+
+# Create state directory
+mkdir -p "$STATE_DIR"
+
+# Prevent parallel installs
+if [[ -f "$LOCK_FILE" ]]; then
+  LOCK_PID=$(cat "$LOCK_FILE" 2>/dev/null)
+  if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    log "[varie-workstation] Installation already in progress (PID $LOCK_PID)"
+    exit 0
+  fi
+  # Stale lock — remove it
+  rm -f "$LOCK_FILE"
+fi
+
+echo $$ > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+# Detect platform and set install path + asset pattern
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  INSTALL_DIR="$HOME/Applications"
+  APP_NAME="Varie Workstation.app"
+  ARCH=$(uname -m)
+  if [[ "$ARCH" == "arm64" ]]; then
+    ASSET_PATTERN="arm64-mac.zip"
+  else
+    # x86_64 (Intel) — match mac.zip, exclude arm64 variant
+    ASSET_PATTERN="mac.zip"
+    ASSET_EXCLUDE="arm64"
+  fi
+
+  # Check if already installed
+  if [[ -d "/Applications/$APP_NAME" ]] || [[ -d "$INSTALL_DIR/$APP_NAME" ]]; then
+    log "[varie-workstation] Already installed"
+    exit 0
+  fi
+
+elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* || "$OSTYPE" == "win32"* ]]; then
+  INSTALL_DIR="$LOCALAPPDATA/Programs/Varie Workstation"
+  ASSET_PATTERN="Setup.*\\.exe"
+  if [[ -f "$INSTALL_DIR/Varie Workstation.exe" ]]; then
+    log "[varie-workstation] Already installed"
+    exit 0
+  fi
+
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  INSTALL_DIR="$HOME/.local/bin"
+  ASSET_PATTERN="AppImage"
+  if [[ -f "$INSTALL_DIR/varie-workstation" ]]; then
+    log "[varie-workstation] Already installed"
+    exit 0
+  fi
+
+else
+  log "[varie-workstation] Unsupported platform: $OSTYPE"
+  exit 1
+fi
+
+mkdir -p "$INSTALL_DIR"
+
+# Fetch latest release asset URL from GitHub API
+log "[varie-workstation] Checking latest release..."
+RELEASE_JSON=$(curl -sL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null)
+
+if [[ -z "$RELEASE_JSON" ]]; then
+  log "[varie-workstation] Failed to fetch release info"
+  exit 1
+fi
+
+# Check if release exists (no releases yet returns error message)
+if echo "$RELEASE_JSON" | grep -q '"message".*"Not Found"'; then
+  log "[varie-workstation] No releases available yet"
+  log "[varie-workstation] Check: https://github.com/$REPO/releases"
+  exit 1
+fi
+
+ASSET_URLS=$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | grep "$ASSET_PATTERN" || true)
+if [[ -n "${ASSET_EXCLUDE:-}" ]]; then
+  ASSET_URLS=$(echo "$ASSET_URLS" | grep -v "$ASSET_EXCLUDE" || true)
+fi
+ASSET_URL=$(echo "$ASSET_URLS" | head -1 | grep -o 'https://[^"]*' || true)
+
+if [[ -z "$ASSET_URL" ]]; then
+  log "[varie-workstation] No matching release asset found for this platform"
+  log "[varie-workstation] Download manually from: https://github.com/$REPO/releases"
+  exit 1
+fi
+
+VERSION=$(echo "$RELEASE_JSON" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | grep -o '"v[^"]*\|"[0-9][^"]*' | tr -d '"')
+log "[varie-workstation] Downloading $VERSION..."
+
+# Download to temp file
+TMPFILE=$(mktemp /tmp/varie-workstation-XXXXXX)
+HTTP_CODE=$(curl -sL -w "%{http_code}" -o "$TMPFILE" "$ASSET_URL" 2>/dev/null)
+
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "302" ]]; then
+  rm -f "$TMPFILE"
+  log "[varie-workstation] Download failed (HTTP $HTTP_CODE)"
+  exit 1
+fi
+
+# Install based on platform
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  log "[varie-workstation] Installing to $INSTALL_DIR..."
+  # Remove old version if present in ~/Applications
+  rm -rf "$INSTALL_DIR/$APP_NAME"
+  unzip -q -o "$TMPFILE" -d "$INSTALL_DIR/"
+  rm -f "$TMPFILE"
+
+  # Verify
+  if [[ -d "$INSTALL_DIR/$APP_NAME" ]]; then
+    log "[varie-workstation] Installed successfully: $INSTALL_DIR/$APP_NAME"
+    # Write install flag for statusline hint (shows for 3 sessions)
+    echo '{"installed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'", "sessions_shown": 0}' > "$STATE_DIR/.workstation-installed"
+    log "[varie-workstation] Run /workstation config autoLaunch true to auto-start on session"
+  else
+    log "[varie-workstation] Installation failed — app not found after extraction"
+    exit 1
+  fi
+
+elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* || "$OSTYPE" == "win32"* ]]; then
+  mv "$TMPFILE" "$TMPFILE.exe"
+  log "[varie-workstation] Running installer..."
+  "$TMPFILE.exe" /S
+  rm -f "$TMPFILE.exe"
+  log "[varie-workstation] Installed successfully"
+
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  mv "$TMPFILE" "$INSTALL_DIR/varie-workstation"
+  chmod +x "$INSTALL_DIR/varie-workstation"
+  log "[varie-workstation] Installed successfully: $INSTALL_DIR/varie-workstation"
+fi

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.google.com https://*.googleapis.com wss://*.google.com; media-src 'self' blob:;">
+  <title>Workstation</title>
+  <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Split Pane Layout -->
+    <div id="main-container">
+      <!-- Manager Panel (Left, 40%) -->
+      <div id="orchestrator-panel">
+        <div id="orchestrator-header">
+          <span class="panel-title">Manager</span>
+          <span id="orchestrator-status"></span>
+        </div>
+        <div id="orchestrator-terminal"></div>
+      </div>
+
+      <!-- Divider -->
+      <div id="divider"></div>
+
+      <!-- Sessions Panel (Right, 60%) -->
+      <div id="workers-panel">
+        <div id="workers-header">
+          <span class="panel-title">Sessions <span id="session-count">(0)</span></span>
+          <!-- Session tabs (inline in header) -->
+          <div id="workers-tabs">
+            <!-- Tabs will be added dynamically -->
+          </div>
+          <div class="header-controls">
+            <select id="theme-selector" title="Terminal Theme">
+              <!-- Populated by JS -->
+            </select>
+            <div class="layout-selector">
+              <button class="layout-btn" data-layout="1x1" title="1x1 Layout (Ctrl+1)">
+                <span class="layout-icon"><span></span></span>
+              </button>
+              <button class="layout-btn active" data-layout="1x2" title="1x2 Layout (Ctrl+2)">
+                <span class="layout-icon"><span></span><span></span></span>
+              </button>
+              <button class="layout-btn" data-layout="2x2" title="2x2 Layout (Ctrl+4)">
+                <span class="layout-icon"><span></span><span></span><span></span><span></span></span>
+              </button>
+            </div>
+            <button id="skip-perms-toggle" class="toggle-btn" title="Skip Permissions for new sessions">
+              <span class="toggle-label">Perms</span>
+            </button>
+            <button id="new-worker-btn" title="New Session (Cmd+N)">+</button>
+          </div>
+        </div>
+
+        <!-- Sessions Grid (default: 1x2) -->
+        <div id="workers-grid" class="layout-1x2">
+          <!-- Left column -->
+          <div class="grid-column" id="grid-col-left">
+            <div class="worker-cell" data-position="0">
+              <div class="cell-placeholder">No session</div>
+            </div>
+            <div class="row-divider" id="row-divider-left"></div>
+            <div class="worker-cell" data-position="2">
+              <div class="cell-placeholder">No session</div>
+            </div>
+          </div>
+          <!-- Grid divider -->
+          <div id="grid-divider"></div>
+          <!-- Right column -->
+          <div class="grid-column" id="grid-col-right">
+            <div class="worker-cell" data-position="1">
+              <div class="cell-placeholder">No session</div>
+            </div>
+            <div class="row-divider" id="row-divider-right"></div>
+            <div class="worker-cell" data-position="3">
+              <div class="cell-placeholder">No session</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Voice Control Bar -->
+    <div id="voice-bar">
+      <div id="voice-status">
+        <span id="voice-status-icon"></span>
+        <span id="voice-status-text">Ctrl+V to speak</span>
+      </div>
+      <button id="voice-cancel-btn" class="hidden" title="Cancel (Esc)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+      <button id="voice-btn" title="Toggle voice (Ctrl+V)">
+        <svg class="mic-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+          <line x1="12" y1="19" x2="12" y2="23"></line>
+          <line x1="8" y1="23" x2="16" y2="23"></line>
+        </svg>
+      </button>
+      <div id="voice-transcript">
+        <span id="voice-interim"></span>
+        <span id="voice-final"></span>
+      </div>
+      <button id="voice-settings-btn" title="Voice Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Voice Settings Modal -->
+  <div id="voice-settings-modal" class="modal hidden">
+    <div class="modal-content voice-settings-content">
+      <h3>Voice Routing Settings</h3>
+      <form id="voice-settings-form">
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="llm-enabled">
+            <span>Enable Smart Routing</span>
+          </label>
+          <span class="form-hint">When enabled, uses AI to route voice commands to the appropriate session</span>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="llm-refine">
+            <span>Refine Transcript</span>
+          </label>
+          <span class="form-hint">Refine grammar, punctuation, misheard words</span>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="confirm-before-send">
+            <span>Confirm Before Send</span>
+          </label>
+          <span class="form-hint">Type text but wait for Enter instead of auto-sending</span>
+        </div>
+
+        <div class="form-group">
+          <label for="speech-locale">Speech Language</label>
+          <select id="speech-locale">
+            <!-- Populated dynamically -->
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="voice-input-mode">Voice Input Mode</label>
+          <select id="voice-input-mode">
+            <option value="apple-speech">Apple Speech (fast, offline)</option>
+            <option value="direct-audio">Direct Audio to LLM (accurate, Gemini only)</option>
+          </select>
+          <span class="form-hint">Direct audio sends recording to LLM for better accuracy</span>
+        </div>
+
+        <div class="form-group">
+          <label for="llm-provider">Provider</label>
+          <select id="llm-provider">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="google">Google (Gemini)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="llm-model">Model</label>
+          <select id="llm-model">
+            <!-- Populated dynamically -->
+          </select>
+          <span class="form-hint">Fast models recommended for routing</span>
+        </div>
+
+        <div class="form-group">
+          <label for="llm-api-key">API Key</label>
+          <div class="api-key-input">
+            <input type="password" id="llm-api-key" placeholder="Enter your API key">
+            <button type="button" id="toggle-api-key" class="icon-btn" title="Show/hide key">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
+          <span class="form-hint" id="api-key-hint">Get your key from the provider's console</span>
+        </div>
+
+        <div class="form-group">
+          <button type="button" id="test-connection-btn" class="secondary-btn">Test Connection</button>
+          <span id="connection-status" class="connection-status"></span>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" id="cancel-voice-settings">Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- New Session Modal -->
+  <div id="new-worker-modal" class="modal hidden">
+    <div class="modal-content">
+      <h3>New Session</h3>
+      <form id="new-worker-form">
+        <div class="form-group">
+          <label for="worker-path">Working Directory</label>
+          <div class="input-with-button">
+            <input type="text" id="worker-path" placeholder="Select a project folder..." required>
+            <button type="button" id="browse-folder-btn" title="Browse...">Browse</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="worker-name">Name (optional)</label>
+          <input type="text" id="worker-name" placeholder="e.g., react-app">
+        </div>
+        <div class="form-group">
+          <label for="worker-permission">Permission Mode</label>
+          <select id="worker-permission">
+            <option value="">Default (from settings)</option>
+            <option value="--dangerously-skip-permissions">Skip All Permissions</option>
+            <option value="--permission-mode acceptEdits">Accept Edits</option>
+            <option value="--permission-mode plan">Plan Mode (read-only)</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="button" id="cancel-new-worker">Cancel</button>
+          <button type="submit">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Skip Permissions Confirmation Modal -->
+  <div id="skip-perms-modal" class="modal hidden">
+    <div class="modal-content skip-perms-confirm">
+      <h3>Hold Up — Bypass Permissions Mode</h3>
+      <div class="warning-body">
+        <p>This lets <strong>new Claude sessions in Workstation</strong> run any command without asking you first. That means:</p>
+        <ul>
+          <li>Files edited, created, or deleted — no confirmation</li>
+          <li>Shell commands execute immediately — no safety net</li>
+          <li>Things can break in creative and unexpected ways</li>
+        </ul>
+        <p class="scope-note">Applies to all new Claude sessions in the Workstation app. Already-running sessions are not affected.</p>
+        <p class="disclaimer">The Workstation developers assume <strong>zero responsibility</strong> for what happens next. You're flying solo.</p>
+        <p class="drunk-warning">DO NOT ENABLE IF YOU ARE DRUNK CODING.</p>
+        <p class="fine-print">Only use this in environments you can recover from. Git is your friend.</p>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="skip-perms-cancel">Nah, I'm Good</button>
+        <button type="button" id="skip-perms-accept" class="danger-btn">I Accept the Chaos</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+#!/bin/bash
+# statusline-context - Track context usage and token stats for Varie Workstation
+#
+# This script is called by Claude Code's status line feature on every message.
+# It receives JSON with context_window data and persists usage stats.
+#
+# Input (stdin): JSON with context_window object
+# Output (stdout): Status line text to display
+
+set -e
+
+VARIE_HOME="${HOME}/.varie"
+SESSIONS_DIR="${VARIE_HOME}/sessions"
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Extract session_id from input or environment
+SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+SESSION_ID="${SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
+
+# Skip if no valid session
+[[ "$SESSION_ID" == "unknown" || -z "$SESSION_ID" ]] && exit 0
+
+# Create session directory
+SESSION_DIR="${SESSIONS_DIR}/${SESSION_ID}"
+mkdir -p "$SESSION_DIR"
+
+USAGE_FILE="${SESSION_DIR}/usage.json"
+
+# Extract context_window fields using grep/sed (portable, no jq dependency)
+extract_field() {
+  local field="$1"
+  echo "$INPUT" | grep -o "\"${field}\"[[:space:]]*:[[:space:]]*[0-9.]*" | head -1 | sed "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/" 2>/dev/null || echo "0"
+}
+
+USED_PCT=$(extract_field "used_percentage")
+REMAINING_PCT=$(extract_field "remaining_percentage")
+WINDOW_SIZE=$(extract_field "context_window_size")
+TOTAL_INPUT=$(extract_field "total_input_tokens")
+TOTAL_OUTPUT=$(extract_field "total_output_tokens")
+CACHE_READ=$(extract_field "cache_read_input_tokens")
+CACHE_CREATION=$(extract_field "cache_creation_input_tokens")
+
+# Get current working directory
+CWD="${PWD}"
+
+# Load existing usage data or create new
+if [[ -f "$USAGE_FILE" ]]; then
+  # Read existing values to preserve repos_touched and task info
+  EXISTING=$(cat "$USAGE_FILE")
+  INITIAL_CWD=$(echo "$EXISTING" | grep -o '"initial_cwd"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"initial_cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || echo "$CWD")
+  STARTED_AT=$(echo "$EXISTING" | grep -o '"started_at"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")
+  REPOS_TOUCHED=$(echo "$EXISTING" | grep -o '"repos_touched"[[:space:]]*:[[:space:]]*\[[^]]*\]' | head -1 || echo '"repos_touched": []')
+  TASK_BLOCK=$(echo "$EXISTING" | grep -o '"task"[[:space:]]*:[[:space:]]*{[^}]*}' | head -1 || echo '')
+else
+  INITIAL_CWD="$CWD"
+  STARTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  REPOS_TOUCHED='"repos_touched": []'
+  TASK_BLOCK=''
+fi
+
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Build JSON (manually to avoid jq dependency)
+cat > "$USAGE_FILE" << EOF
+{
+  "session_id": "${SESSION_ID}",
+  "started_at": "${STARTED_AT}",
+  "last_updated": "${NOW}",
+  "initial_cwd": "${INITIAL_CWD}",
+  "context": {
+    "current_pct": ${USED_PCT:-0},
+    "remaining_pct": ${REMAINING_PCT:-0},
+    "window_size": ${WINDOW_SIZE:-0}
+  },
+  "tokens": {
+    "total_input": ${TOTAL_INPUT:-0},
+    "total_output": ${TOTAL_OUTPUT:-0},
+    "cache_read": ${CACHE_READ:-0},
+    "cache_creation": ${CACHE_CREATION:-0}
+  },
+  ${REPOS_TOUCHED}$(if [[ -n "$TASK_BLOCK" ]]; then echo ",
+  \"task\": ${TASK_BLOCK#*:}"; fi)
+}
+EOF
+
+# Check for workstation install hint (show for 3 sessions after install)
+INSTALL_FLAG="${VARIE_HOME}/.workstation-installed"
+CONFIG_FILE="${VARIE_HOME}/config.yaml"
+HINT_TEXT=""
+
+if [[ -f "$INSTALL_FLAG" ]]; then
+  # Check if autoLaunch is already enabled
+  AUTO_LAUNCH="false"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    AUTO_LAUNCH=$(grep -o 'autoLaunch:[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null && echo "true" || echo "false")
+  fi
+
+  if [[ "$AUTO_LAUNCH" != "true" ]]; then
+    # Read sessions_shown count
+    SESSIONS_SHOWN=$(grep -o '"sessions_shown"[[:space:]]*:[[:space:]]*[0-9]*' "$INSTALL_FLAG" 2>/dev/null | grep -o '[0-9]*' || echo "0")
+
+    if (( SESSIONS_SHOWN < 3 )); then
+      HINT_TEXT=" | Workstation ready: /workstation"
+      # Increment counter
+      NEW_COUNT=$((SESSIONS_SHOWN + 1))
+      sed -i '' "s/\"sessions_shown\"[[:space:]]*:[[:space:]]*[0-9]*/\"sessions_shown\": $NEW_COUNT/" "$INSTALL_FLAG" 2>/dev/null || true
+    else
+      # Done showing hint, remove flag
+      rm -f "$INSTALL_FLAG"
+    fi
+  else
+    # autoLaunch enabled, remove flag
+    rm -f "$INSTALL_FLAG"
+  fi
+fi
+
+# Output status line text
+# Format: context percentage with visual indicator
+if [[ -n "$USED_PCT" && "$USED_PCT" != "0" ]]; then
+  # Round to integer for display
+  PCT_INT=$(printf "%.0f" "$USED_PCT" 2>/dev/null || echo "0")
+
+  # Color coding based on threshold
+  if (( PCT_INT >= 70 )); then
+    echo "ctx:${PCT_INT}%⚠${HINT_TEXT}"
+  elif (( PCT_INT >= 50 )); then
+    echo "ctx:${PCT_INT}%${HINT_TEXT}"
+  else
+    echo "ctx:${PCT_INT}%${HINT_TEXT}"
+  fi
+else
+  # Even without context data, show hint if present
+  if [[ -n "$HINT_TEXT" ]]; then
+    echo "${HINT_TEXT# | }"
+  fi
+fi

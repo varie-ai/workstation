@@ -1,0 +1,92 @@
+{
+  "name": "varie-workstation",
+  "version": "0.1.0",
+  "description": "Unified development environment for managing multiple Claude Code sessions",
+  "main": "dist/main/index.js",
+  "author": {
+    "name": "Varie AI",
+    "email": "dev@varie.ai"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "npm run build && NODE_ENV=development electron .",
+    "build": "npm run build:native && npm run build:main && npm run build:preload && npm run build:renderer",
+    "build:native": "mkdir -p native/macos && cd native/macos && ([ -f speech-recognizer ] || swiftc -O -o speech-recognizer SpeechRecognizer.swift)",
+    "build:main": "esbuild src/main/index.ts --bundle --platform=node --external:electron --external:node-pty --outfile=dist/main/index.js",
+    "build:preload": "esbuild src/main/preload.ts --bundle --platform=node --external:electron --outfile=dist/main/preload.js",
+    "build:renderer": "mkdir -p dist/renderer && esbuild src/renderer/index.ts --bundle --platform=browser --format=iife --outfile=dist/renderer/index.js && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
+    "watch": "npm run build && concurrently \"npm run watch:main\" \"npm run watch:renderer\"",
+    "watch:main": "esbuild src/main/index.ts --bundle --platform=node --external:electron --external:node-pty --outfile=dist/main/index.js --watch",
+    "watch:renderer": "esbuild src/renderer/index.ts --bundle --platform=browser --format=iife --outfile=dist/renderer/index.js --watch",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:win": "npm run build && electron-builder --win",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0",
+    "xterm-addon-web-links": "^0.9.0",
+    "yaml": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "build": {
+    "appId": "ai.varie.workstation",
+    "productName": "Workstation",
+    "directories": {
+      "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "varie-ai",
+      "repo": "workstation"
+    },
+    "mac": {
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Workstation needs microphone access for voice commands to control Claude Code sessions.",
+        "NSSpeechRecognitionUsageDescription": "Workstation uses speech recognition to convert voice commands into text for routing to Claude Code sessions."
+      }
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "files": [
+      "dist/**/*",
+      "native/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "native/macos/speech-recognizer",
+        "to": "native/macos/speech-recognizer"
+      }
+    ],
+    "afterPack": "scripts/afterPack.js"
+  }
+}

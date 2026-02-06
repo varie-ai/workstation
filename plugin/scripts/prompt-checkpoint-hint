@@ -1,0 +1,84 @@
+#!/bin/bash
+# prompt-checkpoint-hint - Detect completion phrases and suggest checkpoints
+#
+# This script runs on every UserPromptSubmit via hook.
+# It detects phrases indicating work completion and gently suggests
+# saving progress with /work-checkpoint or /work-handover.
+#
+# Input (stdin): JSON with prompt field
+# Output (stdout): JSON with additionalContext suggestion (or nothing)
+
+set -e
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Extract prompt field
+PROMPT=$(echo "$INPUT" | grep -o '"prompt"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"prompt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+
+# Convert to lowercase for matching
+PROMPT_LOWER=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')
+
+# Skip if prompt is empty or very short
+[[ ${#PROMPT_LOWER} -lt 3 ]] && exit 0
+
+# Checkpoint suggestion phrases (task completion)
+# These suggest saving progress but continuing
+CHECKPOINT_PATTERNS=(
+  "fixed"
+  "completed"
+  "done with"
+  "finished"
+  "that works"
+  "looks good"
+  "tests pass"
+  "build succeeds"
+)
+
+# Handover suggestion phrases (session ending)
+# These suggest wrapping up the session
+HANDOVER_PATTERNS=(
+  "wrapping up"
+  "stopping here"
+  "done for now"
+  "done for today"
+  "taking a break"
+  "that's all"
+  "call it a day"
+  "end session"
+  "goodbye"
+  "signing off"
+)
+
+# Check for handover phrases first (more specific)
+for pattern in "${HANDOVER_PATTERNS[@]}"; do
+  if echo "$PROMPT_LOWER" | grep -qi "$pattern"; then
+    cat << 'EOF'
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "[Varie Workstation] Wrapping up? Consider `/work-handover` to generate session summary for easy resume later."
+  }
+}
+EOF
+    exit 0
+  fi
+done
+
+# Check for checkpoint phrases
+for pattern in "${CHECKPOINT_PATTERNS[@]}"; do
+  if echo "$PROMPT_LOWER" | grep -qi "$pattern"; then
+    cat << 'EOF'
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "[Varie Workstation] Nice progress! Consider `/work-checkpoint` to save your current state."
+  }
+}
+EOF
+    exit 0
+  fi
+done
+
+# No match - exit silently
+exit 0

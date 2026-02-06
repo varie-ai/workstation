@@ -1,0 +1,125 @@
+#!/bin/bash
+# setup-statusline — Configure Claude Code status line for Varie Workstation
+#
+# One-time setup that merges statusLine config into ~/.claude/settings.json
+# Called by ensure-statusline on first session after plugin install.
+#
+# Usage:
+#   setup-statusline              # Silent mode (for auto-setup)
+#   setup-statusline --verbose    # Show progress
+
+set -e
+
+STATE_DIR="$HOME/.varie"
+MARKER_FILE="$STATE_DIR/.statusline-configured"
+LOCK_FILE="$STATE_DIR/.statusline-installing"
+SETTINGS_FILE="$HOME/.claude/settings.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STATUSLINE_SCRIPT="$SCRIPT_DIR/statusline-context"
+
+VERBOSE=""
+if [[ "$1" == "--verbose" ]]; then
+  VERBOSE="1"
+fi
+
+log() {
+  if [[ -n "$VERBOSE" ]]; then
+    echo "[varie-workstation] $*"
+  fi
+}
+
+# Create state directory
+mkdir -p "$STATE_DIR"
+mkdir -p "$HOME/.claude"
+
+# Already configured?
+if [[ -f "$MARKER_FILE" ]]; then
+  log "Status line already configured"
+  exit 0
+fi
+
+# Check if settings.json already has statusLine configured
+if [[ -f "$SETTINGS_FILE" ]]; then
+  if grep -q '"statusLine"' "$SETTINGS_FILE" 2>/dev/null; then
+    log "Status line already configured in settings.json"
+    touch "$MARKER_FILE"
+    exit 0
+  fi
+fi
+
+# Prevent parallel installs
+if [[ -f "$LOCK_FILE" ]]; then
+  LOCK_PID=$(cat "$LOCK_FILE" 2>/dev/null)
+  if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    log "Setup already in progress (PID $LOCK_PID)"
+    exit 0
+  fi
+  rm -f "$LOCK_FILE"
+fi
+
+echo $$ > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+log "Configuring status line..."
+
+# Determine the plugin path to use in config
+STATUSLINE_CMD="$STATUSLINE_SCRIPT"
+
+# If settings.json doesn't exist, create minimal one
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+  log "Creating new settings.json..."
+  cat > "$SETTINGS_FILE" << EOF
+{
+  "statusLine": {
+    "type": "command",
+    "command": "$STATUSLINE_CMD"
+  }
+}
+EOF
+else
+  # Backup existing
+  cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak"
+  log "Backed up settings.json to settings.json.bak"
+
+  # Use Python for safe JSON merging (available on macOS/Linux)
+  python3 << PYTHON_EOF
+import json
+import sys
+
+settings_file = "$SETTINGS_FILE"
+statusline_cmd = "$STATUSLINE_CMD"
+
+try:
+    with open(settings_file, 'r') as f:
+        data = json.load(f)
+except json.JSONDecodeError:
+    # Invalid JSON - start fresh but preserve backup
+    data = {}
+except FileNotFoundError:
+    data = {}
+
+# Add statusLine config
+data['statusLine'] = {
+    'type': 'command',
+    'command': statusline_cmd
+}
+
+# Write back with nice formatting
+with open(settings_file, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+
+print(f"[varie-workstation] Merged statusLine into {settings_file}")
+PYTHON_EOF
+
+fi
+
+# Mark as configured
+touch "$MARKER_FILE"
+log "Status line configured successfully"
+log "Config: $SETTINGS_FILE"
+log "Script: $STATUSLINE_CMD"
+
+# Inform user (even in silent mode, this is important)
+echo "[varie-workstation] Status line configured for context tracking."
+echo "[varie-workstation] Restart Claude Code to see context % in status line."

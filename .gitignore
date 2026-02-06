@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+release/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+test-*.js
+test-*.html
+test-bundled/
+test-minimal-app/
+
+# Local development
+local-marketplace/
+.playwright-mcp/
+
+# Session transcripts (large files)
+*.txt
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Electron
+*.dmg
+*.zip
+*.exe
+*.AppImage

@@ -1,0 +1,151 @@
+#!/bin/bash
+# workstation-notify - Send events to Varie Workstation daemon
+#
+# Usage: workstation-notify <event-type> [--message "..."]
+# Events: session-start, session-end, checkpoint, step-changed, attention
+
+set -e
+
+# Socket path - daemon writes this to known location
+DAEMON_INFO="$HOME/.varie-workstation/daemon.json"
+SOCKET="/tmp/varie-workstation.sock"
+
+# Check if daemon is running by looking for socket
+if [[ -f "$DAEMON_INFO" ]]; then
+  SOCKET=$(grep -o '"socketPath"[[:space:]]*:[[:space:]]*"[^"]*"' "$DAEMON_INFO" 2>/dev/null | sed 's/.*"socketPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "$SOCKET")
+fi
+
+# Exit silently if no socket (daemon not running - plugin works standalone)
+[[ ! -S "$SOCKET" ]] && exit 0
+
+# Convert hyphens to underscores for event type
+EVENT="${1:-unknown}"
+EVENT="${EVENT//-/_}"
+
+# Get project info from current directory
+PROJECT="$(basename "$PWD")"
+PROJECT_PATH="$PWD"
+
+# Read stdin with timeout (hooks may provide JSON with session info)
+# Use read with timeout to avoid blocking forever if stdin pipe stays open
+STDIN_DATA=""
+if [[ ! -t 0 ]]; then
+  # Read all available lines with 1 second timeout per line
+  while IFS= read -r -t 1 line; do
+    STDIN_DATA+="$line"
+  done
+fi
+
+# Extract session ID from stdin JSON, fallback to env var or generate
+SID=""
+if [[ -n "$STDIN_DATA" ]]; then
+  SID=$(echo "$STDIN_DATA" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+fi
+SID="${SID:-${CLAUDE_SESSION_ID:-$(uuidgen 2>/dev/null || echo "unknown")}}"
+
+# Extract additional fields from stdin if available
+TASK_ID=""
+CURRENT_STEP=""
+if [[ -n "$STDIN_DATA" ]]; then
+  TASK_ID=$(echo "$STDIN_DATA" | grep -o '"task_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"task_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+  CURRENT_STEP=$(echo "$STDIN_DATA" | grep -o '"current_step"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"current_step"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+fi
+
+# Handle --message argument
+MESSAGE=""
+shift || true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --message)
+      MESSAGE="$2"
+      shift 2
+      ;;
+    --task)
+      TASK_ID="$2"
+      shift 2
+      ;;
+    --step)
+      CURRENT_STEP="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# Get git info if available
+GIT_BRANCH=""
+if git rev-parse --git-dir > /dev/null 2>&1; then
+  GIT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+fi
+
+# Escape special chars for JSON
+escape_json() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  echo "$s"
+}
+
+MESSAGE=$(escape_json "$MESSAGE")
+PROJECT=$(escape_json "$PROJECT")
+TASK_ID=$(escape_json "$TASK_ID")
+CURRENT_STEP=$(escape_json "$CURRENT_STEP")
+
+# Build JSON message
+JSON=$(cat <<EOF
+{
+  "type": "$EVENT",
+  "sessionId": "$SID",
+  "timestamp": $(date +%s)000,
+  "context": {
+    "project": "$PROJECT",
+    "projectPath": "$PROJECT_PATH",
+    "taskId": "$TASK_ID",
+    "currentStep": "$CURRENT_STEP",
+    "branch": "$GIT_BRANCH"
+  },
+  "payload": {
+    "message": "$MESSAGE"
+  }
+}
+EOF
+)
+
+# Send to daemon
+# session_end must be synchronous (process tree torn down after)
+# Other events use background with retry
+if [[ "$EVENT" == "session_end" ]]; then
+  echo "$JSON" | nc -w1 -U "$SOCKET" >/dev/null 2>&1 || true
+else
+  (
+    exec >/dev/null 2>&1
+    for _attempt in 1 2 3; do
+      echo "$JSON" | nc -w1 -U "$SOCKET" && break
+      sleep 0.5
+    done
+  ) </dev/null >/dev/null 2>&1 &
+fi
+
+# SessionStart hook: identity context injection disabled due to Claude Code bug
+# See: https://github.com/anthropics/claude-code/issues/16538
+# Plugin-level hooks don't properly surface additionalContext
+# Workaround: Use CLAUDE.md files instead (see Issue #005)
+#
+# When the bug is fixed, uncomment the code below to re-enable hook injection:
+# if [[ "$EVENT" == "session_start" ]]; then
+#   if [[ "$VARIE_MANAGER_SESSION" == "true" ]]; then
+#     cat << 'MANAGER_EOF'
+# { "hookSpecificOutput": { "additionalContext": "## You are the Manager..." } }
+# MANAGER_EOF
+#   else
+#     cat << 'SESSION_EOF'
+# { "hookSpecificOutput": { "additionalContext": "## Varie Workstation Session..." } }
+# SESSION_EOF
+#   fi
+# fi
+
+exit 0

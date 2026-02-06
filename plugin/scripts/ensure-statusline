@@ -1,0 +1,30 @@
+#!/bin/bash
+# ensure-statusline — Ensure status line is configured for Varie Workstation
+#
+# Called by SessionStart hook. Checks if statusline is configured,
+# if not, runs setup in background.
+
+STATE_DIR="$HOME/.varie"
+MARKER_FILE="$STATE_DIR/.statusline-configured"
+SETTINGS_FILE="$HOME/.claude/settings.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SETUP_SCRIPT="$SCRIPT_DIR/setup-statusline"
+
+# Quick check: already configured?
+if [[ -f "$MARKER_FILE" ]]; then
+  exit 0
+fi
+
+# Secondary check: settings.json has statusLine?
+if [[ -f "$SETTINGS_FILE" ]] && grep -q '"statusLine"' "$SETTINGS_FILE" 2>/dev/null; then
+  # Mark as configured and exit
+  mkdir -p "$STATE_DIR"
+  touch "$MARKER_FILE"
+  exit 0
+fi
+
+# Not configured — run setup in background
+# Don't block session start
+nohup "$SETUP_SCRIPT" >/dev/null 2>&1 &
+
+exit 0
