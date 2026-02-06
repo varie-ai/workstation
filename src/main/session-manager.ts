@@ -329,14 +329,14 @@ export class SessionManager {
           // Send command text first
           session.pty.write(command);
           // Then Enter key after delay (required for xterm/Claude to be ready)
-          // 150ms allows Claude input handler to fully process command text
-          // See ISSUE-030: 50ms was occasionally insufficient for new sessions
+          // 300ms allows Claude input handler to fully process command text
+          // See ISSUE-030: 50ms was insufficient, 150ms still intermittent with Electron 40
           // Only send Enter if autoSendEnter is true (ISSUE-034: confirmBeforeSend)
           if (autoSendEnter) {
             setTimeout(() => {
               session.pty.write('\r');
               log('DEBUG', `Sent Enter key for command: ${command.substring(0, 30)}...`);
-            }, 150);
+            }, 300);
           } else {
             log('DEBUG', `Command typed, waiting for user Enter: ${command.substring(0, 30)}...`);
           }
@@ -344,15 +344,15 @@ export class SessionManager {
       }, 100);
     } else {
       // Direct dispatch - command first, then optionally Enter after delay
-      // 150ms allows Claude input handler to fully process command text
-      // See ISSUE-030: 50ms was occasionally insufficient for new sessions
+      // 300ms allows Claude input handler to fully process command text
+      // See ISSUE-030: 50ms was insufficient, 150ms still intermittent with Electron 40
       session.pty.write(command);
       // Only send Enter if autoSendEnter is true (ISSUE-034: confirmBeforeSend)
       if (autoSendEnter) {
         setTimeout(() => {
           session.pty.write('\r');
           log('DEBUG', `Sent Enter key for command: ${command.substring(0, 30)}...`);
-        }, 150);
+        }, 300);
       } else {
         log('DEBUG', `Command typed, waiting for user Enter: ${command.substring(0, 30)}...`);
       }

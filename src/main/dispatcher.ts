@@ -205,8 +205,9 @@ export class Dispatcher {
             };
           }
 
-          // Small buffer after detecting activity
-          await this.delay(500);
+          // Buffer after detecting activity — Claude's output starts before input handler
+          // is fully initialized. 1000ms gives readline time to be ready.
+          await this.delay(1000);
 
           // Check confirmBeforeSend setting (ISSUE-034)
           const llmSettings = loadLLMSettings();
