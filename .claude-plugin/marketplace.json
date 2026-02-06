@@ -10,7 +10,7 @@
     {
       "name": "varie-workstation",
       "description": "Manage multiple Claude Code sessions, track work with checkpoints, and dispatch commands using voice or natural language routing",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "Varie.AI",
         "email": "dev@varie.ai"

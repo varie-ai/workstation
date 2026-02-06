@@ -2,6 +2,16 @@
 
 Multi-session orchestration for Claude Code with voice control.
 
+<img src="screenshots/demo.gif" width="600" alt="Workstation demo — multi-session orchestration with voice routing" />
+
+<p>
+  <img src="screenshots/sessions.png" width="220" alt="Multiple Claude Code sessions side-by-side" />
+  <img src="screenshots/voice.png" width="220" alt="Voice command routing to target session" />
+  <img src="screenshots/checkpoint.png" width="220" alt="Work checkpoint tracking progress" />
+</p>
+
+*Multi-session layout · Voice-powered routing · Checkpoint tracking*
+
 *Created by [Varie AI](https://varie.ai)*
 
 ## Features

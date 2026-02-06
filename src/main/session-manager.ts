@@ -91,9 +91,9 @@ export class SessionManager {
         ? 'powershell.exe'
         : process.env.SHELL || '/bin/zsh';
 
-    // Shell args - no special flags, let the shell run normally
-    // The parent Electron process has proper PATH from user's environment
-    const shellArgs: string[] = [];
+    // Shell args - use login shell to ensure PATH is fully set up
+    // (Electron inherits a minimal env; login shell sources /etc/zprofile etc.)
+    const shellArgs: string[] = ['-l'];
 
     log('INFO', `Creating session ${sessionId} for ${repo} at ${resolvedPath}`);
     log('INFO', `Shell: ${shell} ${shellArgs.join(' ')}`);
