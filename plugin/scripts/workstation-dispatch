@@ -2,5 +2,11 @@
 # workstation-dispatch - Wrapper that calls the Node.js implementation
 # This ensures proper handling of long-running requests (route with auto-create)
 
+# Ensure common Node.js paths are available
+# (Claude Code's Bash tool may have a minimal PATH after restart)
+for p in /opt/homebrew/bin /usr/local/bin; do
+  [[ -d "$p" ]] && [[ ":$PATH:" != *":$p:"* ]] && export PATH="$p:$PATH"
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec node "$SCRIPT_DIR/workstation-dispatch.js" "$@"
