@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "varie-workstation",
+  "description": "Multi-session orchestration for Claude Code with voice control",
+  "owner": {
+    "name": "Varie.AI",
+    "email": "dev@varie.ai"
+  },
+  "plugins": [
+    {
+      "name": "varie-workstation",
+      "description": "Manage multiple Claude Code sessions, track work with checkpoints, and dispatch commands using voice or natural language routing",
+      "version": "0.1.0",
+      "author": {
+        "name": "Varie.AI",
+        "email": "dev@varie.ai"
+      },
+      "source": "./plugin",
+      "category": "productivity"
+    }
+  ]
+}
