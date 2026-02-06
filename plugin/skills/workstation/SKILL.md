@@ -11,8 +11,8 @@ Configure and manage Workstation.
 ## Subcommands
 
 - `/workstation` — Show current status and settings
-- `/workstation autolaunch on` — Enable auto-launch on Claude Code start
-- `/workstation autolaunch off` — Disable auto-launch (default)
+- `/workstation autolaunch on` — Enable auto-launch on Claude Code start (default)
+- `/workstation autolaunch off` — Disable auto-launch
 - `/workstation skip-permissions on` — Enable `--dangerously-skip-permissions` for all sessions
 - `/workstation skip-permissions off` — Disable skip-permissions (default)
 - `/workstation launch` — Launch the workstation app now
@@ -51,10 +51,9 @@ if [[ -S "$SOCKET" ]]; then
   fi
 fi
 
-# Check autoLaunch setting
-if [[ -f "$CONFIG_FILE" ]] && grep -q 'autoLaunch:[[:space:]]*true' "$CONFIG_FILE"; then
-  AUTO_LAUNCH="enabled"
-else
+# Check autoLaunch setting (default: enabled)
+AUTO_LAUNCH="enabled"
+if [[ -f "$CONFIG_FILE" ]] && grep -q 'autoLaunch:[[:space:]]*false' "$CONFIG_FILE"; then
   AUTO_LAUNCH="disabled"
 fi
 
@@ -173,7 +172,7 @@ echo "Workstation launching..."
 
 ```
 User: "/workstation"
-→ Shows status: Running: no, Auto-launch: disabled, Skip permissions: disabled
+→ Shows status: Running: no, Auto-launch: enabled, Skip permissions: disabled
 
 User: "/workstation autolaunch on"
 → "Auto-launch enabled. Workstation will start with Claude Code."
@@ -191,8 +190,7 @@ User: "/workstation launch"
 ## Notes
 
 - Config stored in `~/.varie/config.yaml`
-- Auto-launch is disabled by default (non-intrusive)
+- Auto-launch is enabled by default — run `/workstation autolaunch off` to disable
 - Skip-permissions is disabled by default (safe by default)
 - When skip-permissions is enabled, new sessions start with `--dangerously-skip-permissions`
 - Existing sessions are not affected — only new sessions pick up the setting
-- The workstation is a heavy app; users should opt-in to auto-launch

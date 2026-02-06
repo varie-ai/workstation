@@ -91,27 +91,25 @@ CONFIG_FILE="${VARIE_HOME}/config.yaml"
 HINT_TEXT=""
 
 if [[ -f "$INSTALL_FLAG" ]]; then
-  # Check if autoLaunch is already enabled
-  AUTO_LAUNCH="false"
-  if [[ -f "$CONFIG_FILE" ]]; then
-    AUTO_LAUNCH=$(grep -o 'autoLaunch:[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null && echo "true" || echo "false")
+  # Check if autoLaunch is explicitly disabled
+  AUTO_LAUNCH_OFF="false"
+  if [[ -f "$CONFIG_FILE" ]] && grep -q 'autoLaunch:[[:space:]]*false' "$CONFIG_FILE" 2>/dev/null; then
+    AUTO_LAUNCH_OFF="true"
   fi
 
-  if [[ "$AUTO_LAUNCH" != "true" ]]; then
-    # Read sessions_shown count
+  if [[ "$AUTO_LAUNCH_OFF" == "true" ]]; then
+    # autoLaunch disabled — hint user about the installed app
     SESSIONS_SHOWN=$(grep -o '"sessions_shown"[[:space:]]*:[[:space:]]*[0-9]*' "$INSTALL_FLAG" 2>/dev/null | grep -o '[0-9]*' || echo "0")
 
     if (( SESSIONS_SHOWN < 3 )); then
-      HINT_TEXT=" | Workstation ready: /workstation"
-      # Increment counter
+      HINT_TEXT=" | Workstation ready: /workstation launch"
       NEW_COUNT=$((SESSIONS_SHOWN + 1))
       sed -i '' "s/\"sessions_shown\"[[:space:]]*:[[:space:]]*[0-9]*/\"sessions_shown\": $NEW_COUNT/" "$INSTALL_FLAG" 2>/dev/null || true
     else
-      # Done showing hint, remove flag
       rm -f "$INSTALL_FLAG"
     fi
   else
-    # autoLaunch enabled, remove flag
+    # autoLaunch enabled (default) — app will launch itself, remove flag
     rm -f "$INSTALL_FLAG"
   fi
 fi

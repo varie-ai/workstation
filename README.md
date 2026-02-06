@@ -36,7 +36,7 @@ Skills like `/work-start`, `/work-checkpoint`, `/work-status` work without the d
 ### Full Workstation (Desktop App)
 The desktop app provides the multi-terminal UI and voice control.
 
-**Auto-install:** After adding the plugin, run `/workstation autolaunch on` to auto-download and launch.
+**Auto-install:** After adding the plugin, the app downloads automatically and launches on your next Claude Code session. To disable: `/workstation autolaunch off`.
 
 **Manual download:** See [GitHub Releases](https://github.com/varie-ai/workstation/releases).
 
@@ -81,16 +81,22 @@ npm run dev
 
 | Skill | Description |
 |-------|-------------|
-| `/workstation` | Configure settings, launch app |
-| `/work-start` | Initialize task tracking |
-| `/work-checkpoint` | Save current state |
-| `/work-resume` | Resume previous work |
-| `/work-status` | Show all active tasks |
-| `/work-handover` | Generate handover doc |
-| `/work-sessions` | List active sessions |
-| `/dispatch` | Send to specific session |
-| `/route` | Auto-route by context |
-| `/projects` | Show project index |
+| `/workstation` | Configure settings (autoLaunch, skip-permissions), launch app |
+| `/work-start` | Initialize task tracking with context loading |
+| `/work-checkpoint` | Save structured work state |
+| `/work-resume` | Resume previous work via fuzzy matching |
+| `/work-recover` | Compare checkpoint vs reality after crash |
+| `/work-status` | Show all active tasks across repos |
+| `/work-handover` | Generate session handover documentation |
+| `/work-report` | Generate work reports for standups and team syncs |
+| `/work-summarize` | Quick summary of current session state |
+| `/work-sessions` | List all active sessions |
+| `/work-stats` | Show token usage statistics |
+| `/dispatch` | Send message to specific session by ID |
+| `/route` | Auto-route message to best matching session |
+| `/projects` | Show all projects with status |
+| `/project` | Deep dive into a specific project |
+| `/discover-projects` | Scan for new repos and add to index |
 
 ## Voice Input Modes
 

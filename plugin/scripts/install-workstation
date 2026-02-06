@@ -139,7 +139,9 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     log "[varie-workstation] Installed successfully: $INSTALL_DIR/$APP_NAME"
     # Write install flag for statusline hint (shows for 3 sessions)
     echo '{"installed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'", "sessions_shown": 0}' > "$STATE_DIR/.workstation-installed"
-    log "[varie-workstation] Run /workstation config autoLaunch true to auto-start on session"
+    # Launch immediately in background (don't focus, don't activate)
+    open -g -j "$INSTALL_DIR/$APP_NAME"
+    log "[varie-workstation] Launched. Run /workstation autoLaunch off to disable auto-start"
   else
     log "[varie-workstation] Installation failed — app not found after extraction"
     exit 1
