@@ -381,46 +381,47 @@ export class SessionManager {
    */
   async waitForClaudeReady(sessionId: string, timeoutMs: number = 30000): Promise<boolean> {
     const startTime = Date.now();
-    const pollInterval = 500;
+    const pollInterval = 300;
     const minWaitTime = 2000; // Wait at least 2s for Claude to start
+    const settleTime = 1000;  // Output must be quiet for 1s to consider "ready"
 
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    // Take baseline BEFORE waiting - we want to detect ANY activity during startup
     const baselineActivity = session.lastActive.getTime();
     log('INFO', `Waiting for Claude ready (baseline: ${baselineActivity}, timeout: ${timeoutMs}ms)...`);
 
-    // Wait minimum time, then start polling
+    // Wait minimum time for Claude to begin startup
     await new Promise(resolve => setTimeout(resolve, minWaitTime));
 
-    // Check if there was activity during the initial wait
-    const afterWaitSession = this.sessions.get(sessionId);
-    if (!afterWaitSession) return false;
+    // Now wait for output to SETTLE — Claude is ready when output stops
+    // (banner + plugin loading + hooks finish → input prompt shown → silence)
+    let activityStarted = false;
 
-    if (afterWaitSession.lastActive.getTime() > baselineActivity) {
-      // Activity detected during startup - Claude is outputting
-      log('INFO', `Claude ready in session ${sessionId} (activity detected during startup)`);
-      return true;
-    }
-
-    // No activity during initial wait - continue polling
-    let activityCount = 0;
     while (Date.now() - startTime < timeoutMs) {
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-
       const checkSession = this.sessions.get(sessionId);
       if (!checkSession) return false;
 
-      // Check for new activity since baseline
-      if (checkSession.lastActive.getTime() > baselineActivity) {
-        activityCount++;
-        // Any activity after baseline means Claude is running
-        if (activityCount >= 1) {
-          log('INFO', `Claude ready in session ${sessionId} (activity detected after ${Date.now() - startTime}ms)`);
+      const lastActivity = checkSession.lastActive.getTime();
+
+      if (lastActivity > baselineActivity) {
+        activityStarted = true;
+        const timeSinceLastActivity = Date.now() - lastActivity;
+
+        // Output has settled — no new output for settleTime
+        if (timeSinceLastActivity >= settleTime) {
+          log('INFO', `Claude ready in session ${sessionId} (output settled after ${Date.now() - startTime}ms)`);
           return true;
         }
       }
+
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+
+    // Timeout — but if we saw activity, Claude likely started (just slow)
+    if (activityStarted) {
+      log('WARN', `Timeout but activity was detected in ${sessionId} — proceeding anyway`);
+      return true;
     }
 
     log('WARN', `Timeout waiting for Claude in session ${sessionId} (no activity detected)`);
