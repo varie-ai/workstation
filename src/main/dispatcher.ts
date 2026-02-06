@@ -172,6 +172,21 @@ export class Dispatcher {
     // 1. Try to find existing worker
     let match = this.findBestMatch(query);
 
+    // 1b. Guard against false positives: if the query resolves to a known repo
+    // that differs from the matched session, prefer creating a new session.
+    // Example: query "my-app-backend" fuzzy-matches existing "my-app" session,
+    // but repoResolver knows "my-app-backend" is a separate repo.
+    if (match) {
+      const resolved = this.repoResolver.resolve(query);
+      if (resolved.found && resolved.repo) {
+        const normalize = (s: string) => s.toLowerCase().replace(/[_-]/g, '');
+        if (normalize(match.repo) !== normalize(resolved.repo.name)) {
+          log('INFO', `Fuzzy match "${match.repo}" overridden — query "${query}" resolves to different repo "${resolved.repo.name}"`);
+          match = null;
+        }
+      }
+    }
+
     // 2. If no worker, try to auto-create from known repos
     if (!match) {
       log('INFO', `No existing worker for "${query}", attempting auto-create...`);

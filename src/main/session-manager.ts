@@ -380,52 +380,65 @@ export class SessionManager {
    * Waits for Claude startup (~2-3s) then confirms with activity check
    */
   async waitForClaudeReady(sessionId: string, timeoutMs: number = 30000): Promise<boolean> {
-    const startTime = Date.now();
-    const pollInterval = 300;
-    const minWaitTime = 2000; // Wait at least 2s for Claude to start
-    const settleTime = 1000;  // Output must be quiet for 1s to consider "ready"
-
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    const baselineActivity = session.lastActive.getTime();
-    log('INFO', `Waiting for Claude ready (baseline: ${baselineActivity}, timeout: ${timeoutMs}ms)...`);
+    const startTime = Date.now();
+    const minWaitTime = 1500; // Ignore early output (shell prompt before claude starts)
+    const settleTime = 2000;  // Fallback: output quiet for 2s
+    const promptChar = '\u25b8'; // ▸ — Claude Code's input prompt character
 
-    // Wait minimum time for Claude to begin startup
-    await new Promise(resolve => setTimeout(resolve, minWaitTime));
+    log('INFO', `Waiting for Claude ready in ${sessionId} (timeout: ${timeoutMs}ms)...`);
 
-    // Now wait for output to SETTLE — Claude is ready when output stops
-    // (banner + plugin loading + hooks finish → input prompt shown → silence)
-    let activityStarted = false;
+    return new Promise<boolean>((resolve) => {
+      let resolved = false;
+      let lastDataTime = Date.now();
+      let activityStarted = false;
 
-    while (Date.now() - startTime < timeoutMs) {
-      const checkSession = this.sessions.get(sessionId);
-      if (!checkSession) return false;
+      const cleanup = () => {
+        dataListener.dispose();
+        clearInterval(fallbackTimer);
+        clearTimeout(timeoutTimer);
+      };
 
-      const lastActivity = checkSession.lastActive.getTime();
+      const done = (result: boolean, reason: string) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        log('INFO', `Claude ready=${result} in ${sessionId}: ${reason} (${Date.now() - startTime}ms)`);
+        resolve(result);
+      };
 
-      if (lastActivity > baselineActivity) {
+      // Primary: watch PTY output for Claude's prompt character (▸)
+      // ▸ is multi-byte UTF-8 (U+25B8) so it cannot appear inside ANSI escape sequences
+      const dataListener = session.pty.onData((data: string) => {
+        lastDataTime = Date.now();
         activityStarted = true;
-        const timeSinceLastActivity = Date.now() - lastActivity;
 
-        // Output has settled — no new output for settleTime
-        if (timeSinceLastActivity >= settleTime) {
-          log('INFO', `Claude ready in session ${sessionId} (output settled after ${Date.now() - startTime}ms)`);
-          return true;
+        // Only check for prompt after minWaitTime to skip shell prompt
+        if (Date.now() - startTime < minWaitTime) return;
+
+        if (data.includes(promptChar)) {
+          done(true, 'prompt character detected');
         }
-      }
+      });
 
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-    }
+      // Fallback: settle heuristic (output quiet for settleTime)
+      // Catches cases where Claude version uses a different prompt character
+      const fallbackTimer = setInterval(() => {
+        if (activityStarted && Date.now() - startTime >= minWaitTime && Date.now() - lastDataTime >= settleTime) {
+          done(true, `output settled for ${settleTime}ms (fallback)`);
+        }
+      }, 300);
 
-    // Timeout — but if we saw activity, Claude likely started (just slow)
-    if (activityStarted) {
-      log('WARN', `Timeout but activity was detected in ${sessionId} — proceeding anyway`);
-      return true;
-    }
-
-    log('WARN', `Timeout waiting for Claude in session ${sessionId} (no activity detected)`);
-    return false;
+      // Timeout
+      const timeoutTimer = setTimeout(() => {
+        done(activityStarted,
+          activityStarted
+            ? 'timeout but activity detected — proceeding'
+            : 'timeout with no activity');
+      }, timeoutMs);
+    });
   }
 
   /**

@@ -56,7 +56,7 @@ html, body {
 
 #orchestrator-panel {
   /* Width controlled by CSS custom property for resize */
-  width: var(--manager-width, 40%);
+  width: var(--manager-width, 30%);
   min-width: 200px;
   max-width: 70%;
   display: flex;

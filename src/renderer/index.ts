@@ -1275,7 +1275,7 @@ function setupSkipPermissionsToggle(): void {
 // Panel Resize (Draggable Divider)
 // ============================================================================
 
-let managerWidthPercent = 40; // Default 40%
+let managerWidthPercent = 30; // Default 30%
 
 function setupDividerResize(): void {
   const divider = document.getElementById('divider');
@@ -1349,8 +1349,8 @@ function setupDividerResize(): void {
 
   // Double-click to reset to default
   divider.addEventListener('dblclick', () => {
-    managerWidthPercent = 40;
-    orchestratorPanel.style.setProperty('--manager-width', '40%');
+    managerWidthPercent = 30;
+    orchestratorPanel.style.setProperty('--manager-width', '30%');
     orchestratorPanel.style.width = 'var(--manager-width)';
 
     requestAnimationFrame(() => {
