@@ -46,7 +46,7 @@ trap 'rm -f "$LOCK_FILE"' EXIT
 # Detect platform and set install path + asset pattern
 if [[ "$OSTYPE" == "darwin"* ]]; then
   INSTALL_DIR="$HOME/Applications"
-  APP_NAME="Varie Workstation.app"
+  APP_NAME="Workstation.app"
   ARCH=$(uname -m)
   if [[ "$ARCH" == "arm64" ]]; then
     ASSET_PATTERN="arm64-mac.zip"
