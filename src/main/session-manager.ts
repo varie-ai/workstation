@@ -39,10 +39,22 @@ export class SessionManager {
   private sessions: Map<string, TerminalSession> = new Map();
   private onData: TerminalDataCallback;
   private onSessionEvent: SessionEventCallback;
+  private bundledPluginPath: string | null = null;
 
   constructor(onData: TerminalDataCallback, onSessionEvent: SessionEventCallback) {
     this.onData = onData;
     this.onSessionEvent = onSessionEvent;
+  }
+
+  /**
+   * Set the path to the bundled plugin directory.
+   * When set, all Claude sessions will be started with --plugin-dir <path>.
+   */
+  setBundledPluginPath(pluginPath: string | null): void {
+    this.bundledPluginPath = pluginPath;
+    if (pluginPath) {
+      log('INFO', `Bundled plugin path set: ${pluginPath}`);
+    }
   }
 
   /**
@@ -139,7 +151,8 @@ export class SessionManager {
 
     // Auto-run claude for all sessions (orchestrator and workers)
     setTimeout(() => {
-      const flags = claudeFlags ? ` ${claudeFlags}` : '';
+      const pluginFlag = this.bundledPluginPath ? ` --plugin-dir "${this.bundledPluginPath}"` : '';
+      const flags = `${pluginFlag}${claudeFlags ? ` ${claudeFlags}` : ''}`;
       log('INFO', `Auto-starting claude in session ${sessionId}${flags ? ` with flags: ${flags.trim()}` : ''}`);
       ptyProcess.write(`clear && claude${flags}\r`);
       // Auto-confirm the skip-permissions safety prompt if needed
@@ -314,7 +327,8 @@ export class SessionManager {
       // 1. Send Ctrl+C to cancel any stuck state (safe if Claude is running)
       // 2. Send "claude" to start/restart (no-op if prompt already shows)
       // 3. Wait, then send actual command
-      const flags = session.claudeFlags ? ` ${session.claudeFlags}` : '';
+      const pluginFlag = this.bundledPluginPath ? ` --plugin-dir "${this.bundledPluginPath}"` : '';
+      const flags = `${pluginFlag}${session.claudeFlags ? ` ${session.claudeFlags}` : ''}`;
       session.pty.write('\x03'); // Ctrl+C
       setTimeout(() => {
         session.pty.write(`claude${flags}\r`);

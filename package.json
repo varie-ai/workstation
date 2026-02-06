@@ -1,6 +1,6 @@
 {
   "name": "varie-workstation",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Unified development environment for managing multiple Claude Code sessions",
   "main": "dist/main/index.js",
   "author": {
@@ -85,6 +85,10 @@
       {
         "from": "native/macos/speech-recognizer",
         "to": "native/macos/speech-recognizer"
+      },
+      {
+        "from": "plugin",
+        "to": "plugin"
       }
     ],
     "afterPack": "scripts/afterPack.js"

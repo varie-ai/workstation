@@ -417,7 +417,8 @@ function createOrchestratorUI(session: SessionInfo): void {
   setupTerminalDragDrop(container, session.id);
 
   // Listen for terminal focus to clear worker tab highlight (ISSUE-037)
-  terminal.onFocus(() => {
+  // xterm 5.3 removed onFocus — use textarea DOM event instead
+  terminal.textarea?.addEventListener('focus', () => {
     if (activeWorkerId !== null) {
       activeWorkerId = null;
       updateWorkerCellStates();
@@ -612,7 +613,8 @@ function placeWorkerInGrid(sessionId: string, position: number): void {
     window.workstation.resizeTerminal(sessionId, cols, rows);
 
     // Listen for terminal focus to sync tab highlight (ISSUE-037)
-    state.terminal.onFocus(() => {
+    // xterm 5.3 removed onFocus — use textarea DOM event instead
+    state.terminal.textarea?.addEventListener('focus', () => {
       if (activeWorkerId !== sessionId) {
         activeWorkerId = sessionId;
         updateWorkerCellStates();

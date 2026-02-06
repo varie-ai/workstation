@@ -19,7 +19,8 @@ import { SessionManager, TerminalSession } from './session-manager';
 import { CheckpointStore } from './checkpoint-store';
 import { Dispatcher } from './dispatcher';
 import { initManagerWorkspace, syncDiscoveredRepos } from './manager-workspace';
-import { getClaudeFlags, getSkipPermissions, setSkipPermissions } from './config';
+import { getClaudeFlags, getSkipPermissions, setSkipPermissions, getMarketplacePluginInstall } from './config';
+import * as fs from 'fs';
 import * as managerState from './manager-state';
 import { NativeVoiceCapture, VoiceEvent } from './voice-native';
 import {
@@ -139,6 +140,34 @@ function createWindow(): void {
 }
 
 // ============================================================================
+// Bundled Plugin
+// ============================================================================
+
+/**
+ * Resolve the path to the bundled plugin directory.
+ * In dev: <project-root>/plugin
+ * In production: <app>/Contents/Resources/plugin (via extraResources)
+ */
+function resolveBundledPluginPath(): string | null {
+  let pluginPath: string;
+  if (app.isPackaged) {
+    pluginPath = path.join(process.resourcesPath, 'plugin');
+  } else {
+    pluginPath = path.join(app.getAppPath(), 'plugin');
+  }
+
+  // Verify the plugin directory exists and has a plugin.json
+  const pluginJson = path.join(pluginPath, '.claude-plugin', 'plugin.json');
+  if (fs.existsSync(pluginJson)) {
+    log('INFO', `Bundled plugin found: ${pluginPath} (packaged=${app.isPackaged})`);
+    return pluginPath;
+  }
+
+  log('WARN', `Bundled plugin not found at ${pluginPath}`);
+  return null;
+}
+
+// ============================================================================
 // Service Initialization
 // ============================================================================
 
@@ -194,6 +223,16 @@ function initServices(): void {
       }
     }
   );
+
+  // Resolve bundled plugin path and inject into session manager
+  const bundledPluginPath = resolveBundledPluginPath();
+  if (bundledPluginPath) {
+    sessionManager.setBundledPluginPath(bundledPluginPath);
+    const marketplaceInstall = getMarketplacePluginInstall();
+    if (marketplaceInstall) {
+      log('INFO', `Plugin also installed via marketplace: ${marketplaceInstall.key} at ${marketplaceInstall.installPath}`);
+    }
+  }
 
   // Initialize dispatcher
   dispatcher = new Dispatcher(sessionManager);

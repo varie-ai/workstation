@@ -88,3 +88,29 @@ export function getClaudeFlags(): string {
   }
   return '';
 }
+
+/**
+ * Check if varie-workstation plugin is installed via marketplace.
+ * Reads ~/.claude/plugins/installed_plugins.json for any key matching
+ * "varie-workstation@*". Returns the install path if found, null otherwise.
+ */
+export function getMarketplacePluginInstall(): { key: string; installPath: string } | null {
+  try {
+    const installedPath = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    if (!fs.existsSync(installedPath)) return null;
+    const data = JSON.parse(fs.readFileSync(installedPath, 'utf-8'));
+    if (!data.plugins) return null;
+    for (const key of Object.keys(data.plugins)) {
+      if (key.startsWith('varie-workstation@')) {
+        const entries = data.plugins[key];
+        if (Array.isArray(entries) && entries.length > 0) {
+          return { key, installPath: entries[0].installPath };
+        }
+      }
+    }
+    return null;
+  } catch (err) {
+    log('WARN', 'Failed to check marketplace plugin install:', err);
+    return null;
+  }
+}
