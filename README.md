@@ -25,46 +25,56 @@ Multi-session orchestration for Claude Code with voice control.
 
 ## Installation
 
-### Step 1: Add the marketplace
+### Option A: Download the app (recommended)
 
-In Claude Code, run:
+The desktop app bundles the plugin — no separate plugin install needed.
 
+1. Download from [GitHub Releases](https://github.com/varie-ai/workstation/releases):
+   - **macOS (Apple Silicon):** `*-arm64.dmg`
+   - **macOS (Intel):** `*-x64.dmg`
+
+2. Open the DMG and drag **Workstation** to Applications.
+
+3. Launch the app. All Claude Code sessions started from Workstation automatically have the plugin skills available (`/work-start`, `/work-checkpoint`, `/work-status`, etc.).
+
+> **macOS Gatekeeper:** If macOS blocks the app on first launch:
+> - **macOS 14 and earlier:** Right-click the app > Open > click Open
+> - **macOS 15 (Sequoia):** System Settings > Privacy & Security > "Open Anyway"
+
+### Option B: Install the plugin first
+
+If you prefer to start with the Claude Code plugin (adds skills to standalone Claude Code sessions too):
+
+**Step 1:** Add the marketplace in Claude Code:
 ```
 /plugin marketplace add https://github.com/varie-ai/workstation
 ```
 
-### Step 2: Install the plugin
-
+**Step 2:** Install the plugin:
 ```
 /plugin install varie-workstation@varie-workstation
 ```
 
-### Step 3: Restart Claude Code
+**Step 3:** Restart Claude Code. The plugin's skills are now available.
 
-Close and reopen Claude Code. The plugin's skills (`/work-start`, `/work-checkpoint`, `/work-status`, etc.) are now available.
+**Step 4:** On your next session, the Workstation desktop app downloads and launches automatically. To disable: `/workstation autolaunch off`
 
-### Step 4: Desktop app (automatic)
+### Build from source
 
-On your next Claude Code session, the Workstation desktop app downloads and launches automatically in the background. This gives you the multi-terminal UI and voice control.
-
-To disable auto-launch: `/workstation autolaunch off`
-
-**Manual download:** See [GitHub Releases](https://github.com/varie-ai/workstation/releases).
-
-- **macOS (Apple Silicon):** `*-arm64.dmg`
-- **macOS (Intel):** `*-x64.dmg`
-
-If macOS blocks the app on first launch:
-- **macOS 14 and earlier:** Right-click the app > Open > click Open
-- **macOS 15 (Sequoia):** System Settings > Privacy & Security > "Open Anyway"
-
-**Build from source:**
 ```bash
 git clone https://github.com/varie-ai/workstation.git
 cd workstation
 npm install
 npm run dev
 ```
+
+## Privacy
+
+Workstation runs entirely on your machine. No telemetry, no analytics, no data sent to any third party.
+
+- **All state is local** — Checkpoints, session data, and configuration live in `~/.varie/` on your filesystem. Nothing is synced or uploaded.
+- **Voice (Apple Speech)** — Processed on-device by macOS. Audio never leaves your machine.
+- **LLM smart routing (opt-in)** — If you enable voice routing via an LLM provider (Gemini, Claude, GPT), your voice transcript and project repo names are sent to the provider you choose, using your own API key. This feature is off by default.
 
 ## Quick Start
 
