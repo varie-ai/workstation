@@ -25,18 +25,29 @@ Multi-session orchestration for Claude Code with voice control.
 
 ## Installation
 
-### Plugin Only (CLI skills)
-```bash
-# From Claude Code
-/plugin add varie-workstation
+### Step 1: Add the marketplace
+
+In Claude Code, run:
+
+```
+/plugin marketplace add https://github.com/varie-ai/workstation
 ```
 
-Skills like `/work-start`, `/work-checkpoint`, `/work-status` work without the desktop app.
+### Step 2: Install the plugin
 
-### Full Workstation (Desktop App)
-The desktop app provides the multi-terminal UI and voice control.
+```
+/plugin install varie-workstation@varie-workstation
+```
 
-**Auto-install:** After adding the plugin, the app downloads automatically and launches on your next Claude Code session. To disable: `/workstation autolaunch off`.
+### Step 3: Restart Claude Code
+
+Close and reopen Claude Code. The plugin's skills (`/work-start`, `/work-checkpoint`, `/work-status`, etc.) are now available.
+
+### Step 4: Desktop app (automatic)
+
+On your next Claude Code session, the Workstation desktop app downloads and launches automatically in the background. This gives you the multi-terminal UI and voice control.
+
+To disable auto-launch: `/workstation autolaunch off`
 
 **Manual download:** See [GitHub Releases](https://github.com/varie-ai/workstation/releases).
 
