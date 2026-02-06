@@ -1,8 +1,8 @@
 #!/bin/bash
 # ensure-statusline — Ensure status line is configured for Varie Workstation
 #
-# Called by SessionStart hook. Checks if statusline is configured,
-# if not, runs setup in background.
+# Called by SessionStart hook. Checks if statusline is configured
+# AND that the configured path still exists. If stale, re-runs setup.
 
 STATE_DIR="$HOME/.varie"
 MARKER_FILE="$STATE_DIR/.statusline-configured"
@@ -10,21 +10,38 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SETUP_SCRIPT="$SCRIPT_DIR/setup-statusline"
 
+# Helper: extract the statusLine command path from settings.json
+get_configured_path() {
+  if [[ -f "$SETTINGS_FILE" ]]; then
+    grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | head -1 | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null
+  fi
+}
+
 # Quick check: already configured?
 if [[ -f "$MARKER_FILE" ]]; then
-  exit 0
+  # Validate the path still exists
+  CONFIGURED_PATH=$(get_configured_path)
+  if [[ -n "$CONFIGURED_PATH" && -x "$CONFIGURED_PATH" ]]; then
+    exit 0
+  fi
+  # Path is stale — remove marker and re-setup
+  rm -f "$MARKER_FILE"
 fi
 
 # Secondary check: settings.json has statusLine?
 if [[ -f "$SETTINGS_FILE" ]] && grep -q '"statusLine"' "$SETTINGS_FILE" 2>/dev/null; then
-  # Mark as configured and exit
-  mkdir -p "$STATE_DIR"
-  touch "$MARKER_FILE"
-  exit 0
+  # Validate the command path exists
+  CONFIGURED_PATH=$(get_configured_path)
+  if [[ -n "$CONFIGURED_PATH" && -x "$CONFIGURED_PATH" ]]; then
+    mkdir -p "$STATE_DIR"
+    touch "$MARKER_FILE"
+    exit 0
+  fi
+  # Path is stale — fall through to re-setup
 fi
 
-# Not configured — run setup in background
+# Not configured or stale — run setup in background
 # Don't block session start
-nohup "$SETUP_SCRIPT" >/dev/null 2>&1 &
+nohup "$SETUP_SCRIPT" --force >/dev/null 2>&1 &
 
 exit 0

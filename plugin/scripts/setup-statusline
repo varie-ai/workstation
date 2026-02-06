@@ -18,9 +18,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE_SCRIPT="$SCRIPT_DIR/statusline-context"
 
 VERBOSE=""
-if [[ "$1" == "--verbose" ]]; then
-  VERBOSE="1"
-fi
+FORCE=""
+for arg in "$@"; do
+  case "$arg" in
+    --verbose) VERBOSE="1" ;;
+    --force)   FORCE="1" ;;
+  esac
+done
 
 log() {
   if [[ -n "$VERBOSE" ]]; then
@@ -32,18 +36,23 @@ log() {
 mkdir -p "$STATE_DIR"
 mkdir -p "$HOME/.claude"
 
-# Already configured?
-if [[ -f "$MARKER_FILE" ]]; then
+# Already configured? (skip check if --force)
+if [[ -z "$FORCE" && -f "$MARKER_FILE" ]]; then
   log "Status line already configured"
   exit 0
 fi
 
-# Check if settings.json already has statusLine configured
-if [[ -f "$SETTINGS_FILE" ]]; then
+# Check if settings.json already has statusLine configured with a valid path
+if [[ -z "$FORCE" && -f "$SETTINGS_FILE" ]]; then
   if grep -q '"statusLine"' "$SETTINGS_FILE" 2>/dev/null; then
-    log "Status line already configured in settings.json"
-    touch "$MARKER_FILE"
-    exit 0
+    # Verify the configured command path actually exists
+    CONFIGURED_PATH=$(grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS_FILE" | head -1 | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null)
+    if [[ -n "$CONFIGURED_PATH" && -x "$CONFIGURED_PATH" ]]; then
+      log "Status line already configured in settings.json"
+      touch "$MARKER_FILE"
+      exit 0
+    fi
+    log "Status line path is stale ($CONFIGURED_PATH), updating..."
   fi
 fi
 
