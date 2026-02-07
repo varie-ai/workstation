@@ -78,18 +78,26 @@ jobs:
 
             ### Install
 
-            1. Install the plugin in Claude Code:
-               ```
-               /plugin marketplace add https://github.com/varie-ai/workstation
-               /plugin install varie-workstation@varie-workstation
-               ```
-            2. The app downloads automatically on your first session. Or download manually below.
+            The desktop app bundles the plugin — no separate plugin install needed.
+
+            1. Download the DMG for your platform below
+            2. Open the DMG and drag **Workstation** to Applications
+            3. Launch the app. All Claude Code sessions started from Workstation automatically have the plugin skills available.
+
+            This build is signed and notarized by Apple. macOS Gatekeeper should allow it without issues. If you still see a warning on first launch:
+            - **macOS 14 and earlier:** Right-click the app > Open > click Open
+            - **macOS 15 (Sequoia):** System Settings > Privacy & Security > "Open Anyway"
 
             ### Downloads
 
             - **macOS (Apple Silicon):** `*-arm64.dmg`
             - **macOS (Intel):** `*-x64.dmg`
 
-            This build is code-signed. If macOS blocks it on first launch:
-            - **macOS 14 and earlier:** Right-click the app > Open > click Open
-            - **macOS 15 (Sequoia):** System Settings > Privacy & Security > "Open Anyway"
+            ### Alternative: Install the plugin standalone
+
+            If you prefer to add skills to standalone Claude Code sessions too:
+            ```
+            /plugin marketplace add https://github.com/varie-ai/workstation
+            /plugin install varie-workstation@varie-workstation
+            ```
+            The Workstation app downloads and launches automatically on your next session.
