@@ -25,7 +25,10 @@ test-minimal-app/
 # Local development
 local-marketplace/
 .playwright-mcp/
-screenshots/
+
+# Screenshots - only keep README-referenced assets, ignore raw recordings
+screenshots/*.mov
+screenshots/*.mp4
 
 # Session transcripts (large files)
 *.txt
