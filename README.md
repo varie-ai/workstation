@@ -2,38 +2,40 @@
 
 Multi-session orchestration for Claude Code with voice control.
 
-<img src="screenshots/demo.gif" width="600" alt="Workstation demo — multi-session orchestration with voice routing" />
+<img src="screenshots/demo.gif" width="600" alt="Workstation demo — voice-controlled multi-session routing" />
 
 <p>
-  <img src="screenshots/sessions.png" width="220" alt="Multiple Claude Code sessions side-by-side" />
-  <img src="screenshots/voice.png" width="220" alt="Voice command routing to target session" />
-  <img src="screenshots/checkpoint.png" width="220" alt="Work checkpoint tracking progress" />
+  <img src="screenshots/work-report.png" width="390" alt="Work report — cross-project status for standups and team syncs" />
+  <img src="screenshots/voice-control-settings.png" width="390" alt="Voice control settings — smart routing with LLM providers" />
 </p>
 
-*Multi-session layout · Voice-powered routing · Checkpoint tracking*
+*Work reports for standups · Voice routing settings*
 
-*Created by [Varie AI](https://varie.ai)*
+Built for those who love to build.
+
+---
 
 ## Features
 
-### Session Management
+### Session Management & Orchestration
 - **Multi-session terminals** — Run multiple Claude Code sessions side-by-side
-- **Smart routing** — Auto-dispatch commands to the right session based on repo/task
-- **Work checkpoints** — Save and resume work state across sessions
+- **Smart routing** — Auto-dispatch commands to the right session by repo name, task ID, or context
+- **Manager session** — Central terminal for cross-project commands
 - **Project discovery** — Auto-detect repos and track work progress
+
+### Project Management
+- **Work reports** — Generate human-readable summaries for standups, team syncs, and manager updates
+- **Checkpoints** — Save and resume structured work state across sessions
+- **Handover docs** — Session handovers with resume prompts so nothing gets lost
 
 ### Voice Control
 - **Apple Speech** — Fast, offline speech recognition (macOS)
-- **LLM-powered routing** — Gemini/Claude/GPT transcribes and routes voice commands
+- **LLM-powered routing** — Gemini/Claude/GPT transcribes and routes voice commands to the right session
 - **Hands-free dispatch** — Speak naturally: "continue the character API work"
-- **Transcript refinement** — AI fixes grammar and misheard words
-
-### Orchestration
-- **Manager session** — Central terminal for cross-project commands
-- **Natural language dispatch** — Route by repo name, task ID, or context
-- **Unified status** — See all sessions and projects at a glance
 
 ## Installation
+
+**Requirements:** macOS 12+, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 
 ### Option A: Download the app (recommended)
 
@@ -45,7 +47,7 @@ The desktop app bundles the plugin — no separate plugin install needed.
 
 2. Open the DMG and drag **Workstation** to Applications.
 
-3. Launch the app. All Claude Code sessions started from Workstation automatically have the plugin skills available (`/work-start`, `/work-checkpoint`, `/work-status`, etc.).
+3. Launch the app. All Claude Code sessions started from Workstation automatically have the plugin skills available.
 
 > **macOS Gatekeeper:** If macOS blocks the app on first launch:
 > - **macOS 14 and earlier:** Right-click the app > Open > click Open
@@ -55,19 +57,12 @@ The desktop app bundles the plugin — no separate plugin install needed.
 
 If you prefer to start with the Claude Code plugin (adds skills to standalone Claude Code sessions too):
 
-**Step 1:** Add the marketplace in Claude Code:
 ```
 /plugin marketplace add https://github.com/varie-ai/workstation
-```
-
-**Step 2:** Install the plugin:
-```
 /plugin install varie-workstation@varie-workstation
 ```
 
-**Step 3:** Restart Claude Code. The plugin's skills are now available.
-
-**Step 4:** On your next session, the Workstation desktop app downloads and launches automatically. To disable: `/workstation autolaunch off`
+Restart Claude Code. The Workstation app downloads and launches automatically on your next session. To disable: `/workstation autolaunch off`
 
 ### Build from source
 
@@ -88,91 +83,76 @@ Workstation runs entirely on your machine. No telemetry, no analytics, no data s
 
 ## Quick Start
 
-### Voice Control Setup
-1. Open Workstation app
-2. Click gear icon (voice settings)
-3. Choose provider (Gemini recommended for direct audio)
-4. Enter API key
-5. Press Ctrl+V or click mic to speak
-
 ### Session Workflow
 ```bash
 # From Manager terminal
 /work-sessions          # See all active sessions
-/route "my-app" "check API status"  # Route to matching session
+/route "my-app" "fix the auth bug"  # Route to matching session
 /dispatch abc123 "run tests"       # Send to specific session
 
 # From any session
 /work-start myrepo feature-x       # Start tracking work
 /work-checkpoint                   # Save progress
+/work-report                       # Generate standup summary
 /work-handover                     # Generate handover doc
 ```
 
-## Skills Reference
-
-| Skill | Description |
-|-------|-------------|
-| `/workstation` | Configure settings (autoLaunch, skip-permissions), launch app |
-| `/work-start` | Initialize task tracking with context loading |
-| `/work-checkpoint` | Save structured work state |
-| `/work-resume` | Resume previous work via fuzzy matching |
-| `/work-recover` | Compare checkpoint vs reality after crash |
-| `/work-status` | Show all active tasks across repos |
-| `/work-handover` | Generate session handover documentation |
-| `/work-report` | Generate work reports for standups and team syncs |
-| `/work-summarize` | Quick summary of current session state |
-| `/work-sessions` | List all active sessions |
-| `/work-stats` | Show token usage statistics |
-| `/dispatch` | Send message to specific session by ID |
-| `/route` | Auto-route message to best matching session |
-| `/projects` | Show all projects with status |
-| `/project` | Deep dive into a specific project |
-| `/discover-projects` | Scan for new repos and add to index |
-
-## Voice Input Modes
+### Voice Control Setup
+1. Click the gear icon in Workstation
+2. Enable Smart Routing, choose provider (Gemini recommended)
+3. Enter your API key
+4. Press **Ctrl+V** or click the mic to speak
 
 | Mode | Speed | Accuracy | Offline |
 |------|-------|----------|---------|
 | Apple Speech | Fast | Good | Yes |
 | Direct Audio (Gemini) | Medium | Excellent | No |
 
-**Direct Audio** sends the raw audio to Gemini for transcription, providing better accuracy for technical terms and code-related speech.
+macOS will prompt for **Microphone** and **Speech Recognition** permissions on first use.
+
+## Skills Reference
+
+| Skill | Description |
+|-------|-------------|
+| `/work-start` | Initialize task tracking with context loading |
+| `/work-checkpoint` | Save structured work state |
+| `/work-resume` | Resume previous work via fuzzy matching |
+| `/work-recover` | Compare checkpoint vs reality after crash |
+| `/work-status` | Show all active tasks across repos |
+| `/work-report` | Generate work reports for standups and team syncs |
+| `/work-handover` | Generate session handover documentation |
+| `/work-summarize` | Quick summary of current session state |
+| `/work-sessions` | List all active sessions |
+| `/work-stats` | Show token usage statistics |
+| `/route` | Auto-route message to best matching session |
+| `/dispatch` | Send message to specific session by ID |
+| `/projects` | Show all projects with status |
+| `/project` | Deep dive into a specific project |
+| `/discover-projects` | Scan for new repos and add to index |
+| `/workstation` | Configure settings (autoLaunch, skip-permissions) |
 
 ## Configuration
 
-Settings stored in `~/.varie/config.yaml`:
-
 ```yaml
+# ~/.varie/config.yaml
 autoLaunch: true  # Auto-start with Claude Code
 ```
 
-LLM settings stored in `~/.varie/llm-settings.json`.
+LLM/voice settings are managed through the in-app settings panel.
 
 ## Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Development mode
-npm run dev
-
-# Build for distribution
-npm run package:mac
-npm run package:win
+npm install       # Install dependencies
+npm run dev       # Development mode (Electron)
+npm run test      # Run tests
+npm run package:mac  # Build for distribution
 ```
-
-## Requirements
-
-- macOS 12+ (Apple Speech), Windows 10+, or Linux
-- Node.js 18+
-- Claude Code CLI
 
 ## License
 
 MIT
 
-## Links
+---
 
-- [GitHub](https://github.com/varie-ai/workstation)
-- [Varie AI](https://varie.ai)
+[GitHub](https://github.com/varie-ai/workstation) · [Varie AI](https://varie.ai)

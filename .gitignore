@@ -25,6 +25,7 @@ test-minimal-app/
 # Local development
 local-marketplace/
 .playwright-mcp/
+screenshots/
 
 # Session transcripts (large files)
 *.txt
