@@ -2,7 +2,7 @@
 
 Multi-session orchestration for Claude Code with voice control.
 
-<img src="screenshots/demo.gif" width="600" alt="Workstation demo — voice-controlled multi-session routing" />
+<img src="screenshots/demo.gif" width="100%" alt="Workstation demo — voice-controlled multi-session routing" />
 
 <p>
   <img src="screenshots/work-report.png" width="390" alt="Work report — cross-project status for standups and team syncs" />
