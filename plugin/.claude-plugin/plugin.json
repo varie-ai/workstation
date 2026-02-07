@@ -1,6 +1,6 @@
 {
   "name": "varie-workstation",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Multi-session orchestration with voice control. Manage multiple Claude Code sessions, track work progress with checkpoints, and dispatch commands using Apple Speech or LLM-powered voice recognition. Features smart routing, session management, and hands-free workflow control.",
   "author": {
     "name": "Varie AI",

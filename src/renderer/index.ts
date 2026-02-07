@@ -1561,6 +1561,8 @@ function setupRowDividerResize(): void {
 
 // Track voice capture state
 let isVoiceCapturing = false;
+let isVoiceProcessing = false; // true while routing/dispatching after speech ends
+let voiceProcessingCancelled = false; // set true to abort in-flight routing/dispatch
 
 async function setupVoiceCapture(): Promise<void> {
   const voiceBar = document.getElementById('voice-bar');
@@ -1583,10 +1585,10 @@ async function setupVoiceCapture(): Promise<void> {
     }
   };
 
-  // Cancel voice capture (discard without processing)
+  // Cancel voice capture or in-flight processing
   const cancelVoiceCapture = () => {
     if (isVoiceCapturing) {
-      window.log.info('Voice: cancelling');
+      window.log.info('Voice: cancelling capture');
       isVoiceCapturing = false;
       showCancelBtn(false);
       window.workstation.voiceCancel();
@@ -1599,6 +1601,21 @@ async function setupVoiceCapture(): Promise<void> {
       if (voiceInterim) voiceInterim.textContent = '';
       voiceBtn.classList.remove('recording');
       // Reset status text after brief moment
+      setTimeout(() => {
+        if (voiceStatusText && voiceStatusText.textContent === 'Cancelled') {
+          voiceStatusText.textContent = 'Ctrl+V to speak';
+        }
+      }, 1000);
+    } else if (isVoiceProcessing) {
+      window.log.info('Voice: cancelling in-flight routing/dispatch');
+      voiceProcessingCancelled = true;
+      isVoiceProcessing = false;
+      showCancelBtn(false);
+      voiceBar.dataset.status = 'idle';
+      if (voiceStatusText) {
+        voiceStatusText.textContent = 'Cancelled';
+        voiceStatusText.classList.remove('hint-text');
+      }
       setTimeout(() => {
         if (voiceStatusText && voiceStatusText.textContent === 'Cancelled') {
           voiceStatusText.textContent = 'Ctrl+V to speak';
@@ -1623,6 +1640,9 @@ async function setupVoiceCapture(): Promise<void> {
 
     switch (event.type) {
       case 'status':
+        // Don't let process-close idle event overwrite processing state
+        if (event.status === 'idle' && isVoiceProcessing) break;
+
         voiceBar.dataset.status = event.status;
         const statusMessages: Record<string, string> = {
           idle: 'Ctrl+V to speak',
@@ -1655,13 +1675,17 @@ async function setupVoiceCapture(): Promise<void> {
 
       case 'final':
         window.log.info(`Voice final: "${event.transcript}", audioPath: ${event.audioPath || 'none'}`);
+        // Enter processing state — prevents 'end' event from resetting UI
+        isVoiceProcessing = true;
+        voiceProcessingCancelled = false;
+        voiceBar.dataset.status = 'processing';
         if (voiceInterim) voiceInterim.textContent = '';
-        if (voiceFinal) {
-          voiceFinal.textContent = event.transcript || '';
-          // Auto-scroll to show latest text
-          const transcript = document.getElementById('voice-transcript');
-          if (transcript) transcript.scrollLeft = transcript.scrollWidth;
+        if (voiceFinal) voiceFinal.textContent = '';
+        if (voiceStatusText) {
+          voiceStatusText.textContent = 'Processing...';
+          voiceStatusText.classList.remove('hint-text');
         }
+        showCancelBtn(true);
         handleVoiceCommand(event.transcript || '', event.audioPath);
         break;
 
@@ -1684,13 +1708,16 @@ async function setupVoiceCapture(): Promise<void> {
 
       case 'end':
         isVoiceCapturing = false;
-        voiceBar.dataset.status = 'idle';
-        if (voiceStatusText) {
-          voiceStatusText.textContent = 'Ctrl+V to speak';
-          voiceStatusText.classList.remove('hint-text');
-        }
         voiceBtn.classList.remove('recording');
-        showCancelBtn(false);
+        // Don't reset UI if we're processing (routing/dispatching)
+        if (!isVoiceProcessing) {
+          voiceBar.dataset.status = 'idle';
+          if (voiceStatusText) {
+            voiceStatusText.textContent = 'Ctrl+V to speak';
+            voiceStatusText.classList.remove('hint-text');
+          }
+          showCancelBtn(false);
+        }
         break;
     }
   });
@@ -1699,6 +1726,9 @@ async function setupVoiceCapture(): Promise<void> {
   voiceBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // Block toggle while routing/dispatching
+    if (isVoiceProcessing) return;
 
     if (isVoiceCapturing) {
       // Stop recording
@@ -1730,7 +1760,7 @@ async function setupVoiceCapture(): Promise<void> {
 
   // Escape key - cancel recording (global listener)
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && isVoiceCapturing) {
+    if (e.key === 'Escape' && (isVoiceCapturing || isVoiceProcessing)) {
       e.preventDefault();
       cancelVoiceCapture();
     }
@@ -2062,13 +2092,9 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
 
   let targetSessionId: string | undefined;
   let targetName: string = '';
-  let routingInfo: string = '';
-
   if (useRouting) {
     // Use LLM-based routing
-    if (voiceStatusText) {
-      voiceStatusText.textContent = 'Routing...';
-    }
+    if (voiceStatusText) voiceStatusText.textContent = 'Routing...';
 
     try {
       const result = await window.workstation.voiceRoute(transcript, focusedSessionId, audioPath);
@@ -2094,12 +2120,9 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
         }
       }
 
-      // Add routing confidence to status
-      if (result.usedLLM) {
-        routingInfo = ` (${result.confidence})`;
-      }
     } catch (err) {
       window.log.error('Voice routing failed:', err);
+      if (voiceStatusText) voiceStatusText.textContent = 'Routing failed, sending to focused...';
       // Fall back to focused session
       targetSessionId = focusedSessionId;
       targetName = focusedName;
@@ -2110,7 +2133,17 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
     targetName = focusedName;
   }
 
+  // Check if cancelled during routing
+  if (voiceProcessingCancelled) {
+    window.log.info('Voice: routing cancelled by user');
+    return;
+  }
+
   if (targetSessionId && targetSessionId !== 'unknown') {
+    // Show sending status — hide cancel since we're about to dispatch
+    if (voiceStatusText) voiceStatusText.textContent = `Sending to ${targetName}...`;
+    document.getElementById('voice-cancel-btn')?.classList.add('hidden');
+
     // Bring target session to front if it's a hidden worker
     const targetWorker = workers.get(targetSessionId);
     if (targetWorker && targetWorker.gridPosition === undefined) {
@@ -2153,25 +2186,38 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
     if (voiceInterim) voiceInterim.textContent = '';
 
     // Update voice bar to show where it was sent
+    const voiceBar = document.getElementById('voice-bar');
     if (voiceStatusText) {
       if (shouldAutoSend) {
-        voiceStatusText.textContent = `Sent to ${targetName}${routingInfo}`;
+        voiceStatusText.textContent = `Sent to ${targetName}`;
       } else {
         // When confirmBeforeSend is true, prompt user to press Enter
         voiceStatusText.textContent = `Typed in ${targetName} - press Enter to send`;
       }
-      // Reset after 2 seconds (longer for confirm mode so user sees instruction)
+      // Reset after delay (longer for confirm mode so user sees instruction)
       setTimeout(() => {
+        isVoiceProcessing = false;
+        if (voiceBar) voiceBar.dataset.status = 'idle';
         voiceStatusText.textContent = 'Ctrl+V to speak';
       }, shouldAutoSend ? 2000 : 4000);
+    } else {
+      isVoiceProcessing = false;
+      if (voiceBar) voiceBar.dataset.status = 'idle';
     }
   } else {
     window.log.warn('No session to send voice command');
+    document.getElementById('voice-cancel-btn')?.classList.add('hidden');
+    const voiceBar = document.getElementById('voice-bar');
     if (voiceStatusText) {
       voiceStatusText.textContent = 'No session available';
       setTimeout(() => {
+        isVoiceProcessing = false;
+        if (voiceBar) voiceBar.dataset.status = 'idle';
         voiceStatusText.textContent = 'Ctrl+V to speak';
       }, 2000);
+    } else {
+      isVoiceProcessing = false;
+      if (voiceBar) voiceBar.dataset.status = 'idle';
     }
   }
 }
