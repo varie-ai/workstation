@@ -1981,7 +1981,7 @@ async function showVoiceSettingsModal(): Promise<void> {
     const engine = speechEngineSelect.value;
     if (speechEngineHint) {
       speechEngineHint.textContent = engine === 'whisperkit'
-        ? 'Local Whisper on Apple Silicon. First load ~10s, then ~1s. Larger models = better quality, slightly slower.'
+        ? 'Local Whisper on Apple Silicon. First model compile may take 10s+. Larger models = better quality.'
         : 'Apple Speech: real-time streaming, instant startup';
     }
     // Show/hide whisperkit model section
