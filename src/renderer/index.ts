@@ -29,16 +29,19 @@ interface SessionInfo {
 type LLMProvider = 'anthropic' | 'openai' | 'google';
 
 type SpeechLocale = 'auto' | 'en-US' | 'zh-CN' | 'zh-TW' | 'ja-JP' | 'ko-KR' | 'es-ES' | 'fr-FR' | 'de-DE';
-type VoiceInputMode = 'apple-speech' | 'direct-audio';
+type SpeechEngine = 'apple-speech' | 'whisperkit';
+type VoiceRoutingMode = 'focused' | 'manager' | 'smart';
 
 interface LLMSettings {
   provider: LLMProvider;
   model: string;
   apiKey: string;
-  enabled: boolean;
+  voiceRoutingMode: VoiceRoutingMode;
   refineTranscript: boolean;
   speechLocale: SpeechLocale;
-  voiceInputMode: VoiceInputMode;
+  speechEngine: SpeechEngine;
+  directAudioRouting: boolean;
+  whisperKitModel: string;
   confirmBeforeSend: boolean;
 }
 
@@ -1647,17 +1650,23 @@ async function setupVoiceCapture(): Promise<void> {
         const statusMessages: Record<string, string> = {
           idle: 'Ctrl+V to speak',
           listening: 'Esc to cancel · Ctrl+V to finish',
+          buffering: 'Speak now · warming up...',
           recording: 'Esc to cancel · Ctrl+V to finish',
           processing: 'Processing...',
+          downloading: 'Downloading model...',
+          loading: 'Loading model...',
+          transcribing: 'Transcribing...',
         };
         if (voiceStatusText) {
           voiceStatusText.textContent = statusMessages[event.status] || event.status;
           // Smaller font for recording hints (more text)
-          voiceStatusText.classList.toggle('hint-text', event.status === 'listening' || event.status === 'recording');
+          const isRecordingState = event.status === 'listening' || event.status === 'recording' || event.status === 'buffering';
+          voiceStatusText.classList.toggle('hint-text', isRecordingState);
         }
-        voiceBtn.classList.toggle('recording', event.status === 'listening');
+        const isActiveCapture = event.status === 'listening' || event.status === 'buffering';
+        voiceBtn.classList.toggle('recording', isActiveCapture);
         // Show cancel button when recording, hide otherwise
-        showCancelBtn(event.status === 'listening' || event.status === 'recording');
+        showCancelBtn(isActiveCapture || event.status === 'recording');
         if (event.status === 'idle') {
           isVoiceCapturing = false;
           showCancelBtn(false);
@@ -1719,6 +1728,16 @@ async function setupVoiceCapture(): Promise<void> {
           showCancelBtn(false);
         }
         break;
+
+      case 'progress': {
+        // Forward download progress to the settings modal if it's open
+        const statusEl = document.getElementById('whisperkit-model-status');
+        if (statusEl && event.progress != null) {
+          const pct = Math.round(event.progress * 100);
+          statusEl.textContent = `Downloading${event.model ? ' ' + event.model : ''}... ${pct}%`;
+        }
+        break;
+      }
     }
   });
 
@@ -1778,11 +1797,12 @@ let providerModels: Record<LLMProvider, ModelInfo[]> | null = null;
 async function showVoiceSettingsModal(): Promise<void> {
   const modal = document.getElementById('voice-settings-modal');
   const form = document.getElementById('voice-settings-form') as HTMLFormElement | null;
-  const enabledCheckbox = document.getElementById('llm-enabled') as HTMLInputElement | null;
+  const voiceRoutingModeSelect = document.getElementById('voice-routing-mode') as HTMLSelectElement | null;
   const refineCheckbox = document.getElementById('llm-refine') as HTMLInputElement | null;
   const confirmBeforeSendCheckbox = document.getElementById('confirm-before-send') as HTMLInputElement | null;
   const speechLocaleSelect = document.getElementById('speech-locale') as HTMLSelectElement | null;
-  const voiceInputModeSelect = document.getElementById('voice-input-mode') as HTMLSelectElement | null;
+  const speechEngineSelect = document.getElementById('speech-engine') as HTMLSelectElement | null;
+  const directAudioCheckbox = document.getElementById('direct-audio-routing') as HTMLInputElement | null;
   const providerSelect = document.getElementById('llm-provider') as HTMLSelectElement | null;
   const modelSelect = document.getElementById('llm-model') as HTMLSelectElement | null;
   const apiKeyInput = document.getElementById('llm-api-key') as HTMLInputElement | null;
@@ -1792,7 +1812,7 @@ async function showVoiceSettingsModal(): Promise<void> {
   const cancelBtn = document.getElementById('cancel-voice-settings');
   const apiKeyHint = document.getElementById('api-key-hint');
 
-  if (!modal || !form || !enabledCheckbox || !refineCheckbox || !confirmBeforeSendCheckbox || !speechLocaleSelect || !voiceInputModeSelect || !providerSelect || !modelSelect || !apiKeyInput) {
+  if (!modal || !form || !voiceRoutingModeSelect || !refineCheckbox || !confirmBeforeSendCheckbox || !speechLocaleSelect || !speechEngineSelect || !directAudioCheckbox || !providerSelect || !modelSelect || !apiKeyInput) {
     window.log.error('Voice settings modal elements not found');
     return;
   }
@@ -1825,8 +1845,16 @@ async function showVoiceSettingsModal(): Promise<void> {
     return;
   }
 
+  // WhisperKit model picker elements
+  const whisperKitModelSection = document.getElementById('whisperkit-model-section');
+  const whisperKitModelSelect = document.getElementById('whisperkit-model') as HTMLSelectElement | null;
+  const whisperKitDownloadBtn = document.getElementById('whisperkit-download-btn') as HTMLButtonElement | null;
+  const whisperKitModelStatus = document.getElementById('whisperkit-model-status');
+  let downloadedModels: string[] = [];
+  let isDownloading = false;
+
   // Populate form
-  enabledCheckbox.checked = settings.enabled;
+  voiceRoutingModeSelect.value = settings.voiceRoutingMode;
   refineCheckbox.checked = settings.refineTranscript;
   confirmBeforeSendCheckbox.checked = settings.confirmBeforeSend;
   providerSelect.value = settings.provider;
@@ -1835,8 +1863,10 @@ async function showVoiceSettingsModal(): Promise<void> {
   // Populate speech locales
   populateSpeechLocales(speechLocaleSelect, speechLocales, settings.speechLocale);
 
-  // Set voice input mode
-  voiceInputModeSelect.value = settings.voiceInputMode || 'apple-speech';
+  // Set speech engine, direct audio routing, and whisperkit model from settings
+  speechEngineSelect.value = settings.speechEngine;
+  directAudioCheckbox.checked = settings.directAudioRouting;
+  if (whisperKitModelSelect) whisperKitModelSelect.value = settings.whisperKitModel || 'base';
 
   // Populate models for current provider
   populateModels(modelSelect, providerModels[settings.provider], settings.model);
@@ -1853,6 +1883,20 @@ async function showVoiceSettingsModal(): Promise<void> {
   // Show modal
   modal.classList.remove('hidden');
 
+  // Handle voice routing mode change
+  const voiceRoutingHint = document.getElementById('voice-routing-hint');
+  const voiceRoutingModeChangeHandler = () => {
+    const mode = voiceRoutingModeSelect.value;
+    const hints: Record<string, string> = {
+      focused: 'Send voice commands to the currently focused session',
+      manager: 'All voice input goes to the manager session for internal routing',
+      smart: 'Uses LLM to automatically route voice commands to the best session',
+    };
+    if (voiceRoutingHint) voiceRoutingHint.textContent = hints[mode] || '';
+  };
+  voiceRoutingModeSelect.addEventListener('change', voiceRoutingModeChangeHandler);
+  voiceRoutingModeChangeHandler(); // Apply initial state
+
   // Handle provider change
   const providerChangeHandler = () => {
     const provider = providerSelect.value as LLMProvider;
@@ -1863,29 +1907,146 @@ async function showVoiceSettingsModal(): Promise<void> {
   };
   providerSelect.addEventListener('change', providerChangeHandler);
 
-  // Handle voice input mode change - lock to Gemini when direct-audio selected
-  const voiceInputModeChangeHandler = () => {
-    const mode = voiceInputModeSelect.value;
-    if (mode === 'direct-audio') {
-      // Direct audio only works with Gemini - lock provider and model
+  // Helper: build LLMSettings from form state
+  const buildSettingsFromForm = (): LLMSettings => {
+    return {
+      voiceRoutingMode: voiceRoutingModeSelect.value as VoiceRoutingMode,
+      refineTranscript: refineCheckbox.checked,
+      confirmBeforeSend: confirmBeforeSendCheckbox.checked,
+      speechLocale: speechLocaleSelect.value as SpeechLocale,
+      speechEngine: speechEngineSelect.value as SpeechEngine,
+      directAudioRouting: directAudioCheckbox.checked,
+      whisperKitModel: whisperKitModelSelect?.value || settings.whisperKitModel || 'base',
+      provider: providerSelect.value as LLMProvider,
+      model: modelSelect.value,
+      apiKey: apiKeyInput.value,
+    };
+  };
+
+  // Update whisperkit model status text and download button
+  const updateWhisperKitModelStatus = () => {
+    if (!whisperKitModelSelect || !whisperKitModelStatus || !whisperKitDownloadBtn) return;
+    const selectedModel = whisperKitModelSelect.value;
+    const isDownloaded = downloadedModels.some(d => d.includes(selectedModel));
+    if (isDownloading) {
+      // Don't change status while downloading — progress handler manages it
+      return;
+    }
+    if (isDownloaded) {
+      whisperKitModelStatus.textContent = 'Model downloaded and ready';
+      whisperKitDownloadBtn.textContent = 'Downloaded';
+      whisperKitDownloadBtn.disabled = true;
+    } else {
+      whisperKitModelStatus.textContent = 'Model not downloaded';
+      whisperKitDownloadBtn.textContent = 'Download';
+      whisperKitDownloadBtn.disabled = false;
+    }
+  };
+
+  // Refresh model list from backend and populate dropdown
+  const refreshWhisperKitModels = async () => {
+    if (!whisperKitModelStatus || !whisperKitModelSelect) return;
+    whisperKitModelStatus.textContent = 'Checking model status...';
+    try {
+      const info = await window.workstation.whisperKitListModels();
+      downloadedModels = info.downloaded || [];
+
+      // Populate dropdown from supported models (device-appropriate subset)
+      const currentValue = whisperKitModelSelect.value;
+      const modelsToShow = info.supported.length > 0 ? info.supported : info.available;
+      whisperKitModelSelect.innerHTML = '';
+      for (const name of modelsToShow) {
+        const option = document.createElement('option');
+        option.value = name;
+        const isDownloaded = downloadedModels.some(d => d.includes(name));
+        option.textContent = name + (isDownloaded ? ' (downloaded)' : '');
+        whisperKitModelSelect.appendChild(option);
+      }
+      // Restore selection: prefer current setting, then previous selection, then default
+      const preferred = settings.whisperKitModel || currentValue || info.default || 'base';
+      const hasPreferred = modelsToShow.some(m => m === preferred || m.includes(preferred));
+      if (hasPreferred) {
+        whisperKitModelSelect.value = modelsToShow.find(m => m === preferred || m.includes(preferred)) || '';
+      }
+
+      updateWhisperKitModelStatus();
+    } catch {
+      whisperKitModelStatus.textContent = 'Could not check model status';
+    }
+  };
+
+  // Handle speech engine change — show/hide whisperkit section
+  const speechEngineHint = document.getElementById('speech-engine-hint');
+  const speechEngineChangeHandler = () => {
+    const engine = speechEngineSelect.value;
+    if (speechEngineHint) {
+      speechEngineHint.textContent = engine === 'whisperkit'
+        ? 'Local Whisper on Apple Silicon. First load ~10s, then ~1s. Larger models = better quality, slightly slower.'
+        : 'Apple Speech: real-time streaming, instant startup';
+    }
+    // Show/hide whisperkit model section
+    if (whisperKitModelSection) {
+      const show = engine === 'whisperkit';
+      whisperKitModelSection.classList.toggle('hidden', !show);
+      if (show) refreshWhisperKitModels();
+    }
+  };
+  speechEngineSelect.addEventListener('change', speechEngineChangeHandler);
+
+  // Handle whisperkit model dropdown change
+  const whisperKitModelChangeHandler = () => updateWhisperKitModelStatus();
+  whisperKitModelSelect?.addEventListener('change', whisperKitModelChangeHandler);
+
+  // Handle whisperkit download button
+  const whisperKitDownloadHandler = async () => {
+    if (!whisperKitModelSelect || !whisperKitModelStatus || !whisperKitDownloadBtn) return;
+    const modelName = whisperKitModelSelect.value;
+    isDownloading = true;
+    whisperKitDownloadBtn.textContent = 'Downloading...';
+    whisperKitDownloadBtn.disabled = true;
+    whisperKitModelStatus.textContent = 'Starting download...';
+    try {
+      const result = await window.workstation.whisperKitDownloadModel(modelName);
+      isDownloading = false;
+      if (result.success) {
+        downloadedModels.push(modelName);
+        whisperKitModelStatus.textContent = 'Model downloaded and ready';
+        whisperKitDownloadBtn.textContent = 'Downloaded';
+        whisperKitDownloadBtn.disabled = true;
+      } else {
+        whisperKitModelStatus.textContent = 'Download failed: ' + (result.error || 'unknown error');
+        whisperKitDownloadBtn.textContent = 'Retry';
+        whisperKitDownloadBtn.disabled = false;
+      }
+    } catch (err) {
+      isDownloading = false;
+      whisperKitModelStatus.textContent = 'Download failed';
+      whisperKitDownloadBtn.textContent = 'Retry';
+      whisperKitDownloadBtn.disabled = false;
+    }
+  };
+  whisperKitDownloadBtn?.addEventListener('click', whisperKitDownloadHandler);
+
+  // Handle direct audio routing change — locks provider to Google when checked
+  const directAudioChangeHandler = () => {
+    if (directAudioCheckbox.checked) {
       providerSelect.value = 'google';
       providerSelect.disabled = true;
       if (providerModels) {
         populateModels(modelSelect, providerModels.google);
-        // Select gemini-3-flash-preview (fast model for routing)
         modelSelect.value = 'gemini-3-flash-preview';
       }
       modelSelect.disabled = true;
       updateApiKeyHint(apiKeyHint, 'google');
     } else {
-      // Apple Speech - unlock provider and model selection
       providerSelect.disabled = false;
       modelSelect.disabled = false;
     }
   };
-  voiceInputModeSelect.addEventListener('change', voiceInputModeChangeHandler);
+  directAudioCheckbox.addEventListener('change', directAudioChangeHandler);
   // Apply initial state based on loaded settings
-  voiceInputModeChangeHandler();
+  speechEngineChangeHandler();
+  directAudioChangeHandler();
 
   // Handle toggle API key visibility
   const toggleKeyHandler = () => {
@@ -1902,16 +2063,7 @@ async function showVoiceSettingsModal(): Promise<void> {
     connectionStatus.className = 'connection-status testing';
 
     // Save current settings first (to test with them)
-    const testSettings: LLMSettings = {
-      enabled: enabledCheckbox.checked,
-      refineTranscript: refineCheckbox.checked,
-      confirmBeforeSend: confirmBeforeSendCheckbox.checked,
-      speechLocale: speechLocaleSelect.value as SpeechLocale,
-      voiceInputMode: voiceInputModeSelect.value as VoiceInputMode,
-      provider: providerSelect.value as LLMProvider,
-      model: modelSelect.value,
-      apiKey: apiKeyInput.value,
-    };
+    const testSettings = buildSettingsFromForm();
 
     try {
       await window.workstation.llmSaveSettings(testSettings);
@@ -1937,21 +2089,25 @@ async function showVoiceSettingsModal(): Promise<void> {
   const submitHandler = async (e: Event) => {
     e.preventDefault();
 
-    const newSettings: LLMSettings = {
-      enabled: enabledCheckbox.checked,
-      refineTranscript: refineCheckbox.checked,
-      confirmBeforeSend: confirmBeforeSendCheckbox.checked,
-      speechLocale: speechLocaleSelect.value as SpeechLocale,
-      voiceInputMode: voiceInputModeSelect.value as VoiceInputMode,
-      provider: providerSelect.value as LLMProvider,
-      model: modelSelect.value,
-      apiKey: apiKeyInput.value,
-    };
+    const newSettings = buildSettingsFromForm();
 
     try {
       const result = await window.workstation.llmSaveSettings(newSettings);
       if (result.success) {
         window.log.info('LLM settings saved');
+        // Auto-trigger model download if whisperkit selected and model not yet downloaded
+        if (newSettings.speechEngine === 'whisperkit' && !isDownloading) {
+          try {
+            const info = await window.workstation.whisperKitListModels();
+            const isDownloaded = (info.downloaded || []).some((d: string) => d.includes(newSettings.whisperKitModel));
+            if (!isDownloaded) {
+              window.log.info('Auto-downloading WhisperKit model:', newSettings.whisperKitModel);
+              window.workstation.whisperKitDownloadModel(newSettings.whisperKitModel);
+            }
+          } catch {
+            // Non-blocking — user can download manually later
+          }
+        }
         hideVoiceSettingsModal();
       } else {
         window.log.error('Failed to save LLM settings:', result.error);
@@ -1994,7 +2150,12 @@ async function showVoiceSettingsModal(): Promise<void> {
 
   // Cleanup function
   const cleanup = () => {
+    voiceRoutingModeSelect.removeEventListener('change', voiceRoutingModeChangeHandler);
     providerSelect.removeEventListener('change', providerChangeHandler);
+    speechEngineSelect.removeEventListener('change', speechEngineChangeHandler);
+    directAudioCheckbox.removeEventListener('change', directAudioChangeHandler);
+    whisperKitModelSelect?.removeEventListener('change', whisperKitModelChangeHandler);
+    whisperKitDownloadBtn?.removeEventListener('click', whisperKitDownloadHandler);
     toggleKeyBtn?.removeEventListener('click', toggleKeyHandler);
     testBtn?.removeEventListener('click', testHandler);
     form.removeEventListener('submit', submitHandler);
@@ -2082,17 +2243,28 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
     focusedName = 'Manager';
   }
 
-  // Check if LLM routing is available
-  let useRouting = false;
+  // Determine routing based on voiceRoutingMode
+  let llmSettings: LLMSettings;
   try {
-    useRouting = await window.workstation.llmIsRoutingAvailable();
-  } catch (err) {
-    window.log.warn('Could not check LLM routing availability:', err);
+    llmSettings = await window.workstation.llmGetSettings();
+  } catch {
+    llmSettings = { voiceRoutingMode: 'focused' } as LLMSettings;
   }
 
   let targetSessionId: string | undefined;
   let targetName: string = '';
-  if (useRouting) {
+
+  if (llmSettings.voiceRoutingMode === 'manager') {
+    // Always send to manager
+    if (orchestratorState) {
+      targetSessionId = orchestratorState.session.id;
+      targetName = 'Manager';
+    } else {
+      // No manager session — fall back to focused
+      targetSessionId = focusedSessionId;
+      targetName = focusedName;
+    }
+  } else if (llmSettings.voiceRoutingMode === 'smart') {
     // Use LLM-based routing
     if (voiceStatusText) voiceStatusText.textContent = 'Routing...';
 
@@ -2128,7 +2300,7 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
       targetName = focusedName;
     }
   } else {
-    // Direct routing to focused session
+    // Default: send to focused session
     targetSessionId = focusedSessionId;
     targetName = focusedName;
   }
@@ -2167,11 +2339,11 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
       window.log.warn('Could not get confirmBeforeSend setting:', err);
     }
 
-    // When LLM routing is enabled and confirmBeforeSend is false, auto-press Enter
+    // When confirmBeforeSend is false, auto-press Enter after typing
     // (xterm/Claude needs text and Enter to be separate writes)
     // 150ms allows Claude input handler to fully process command text
     // See ISSUE-030: 50ms was occasionally insufficient
-    const shouldAutoSend = useRouting && !confirmBeforeSend;
+    const shouldAutoSend = !confirmBeforeSend;
     if (shouldAutoSend) {
       setTimeout(() => {
         window.workstation.writeToTerminal(targetSessionId, '\r');

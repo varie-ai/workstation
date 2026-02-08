@@ -418,12 +418,14 @@ function setupIpcHandlers(): void {
       });
     }
 
-    // Set locale and audio recording from LLM settings
+    // Build start options from LLM settings
     const settings = loadLLMSettings();
-    voiceCapture.setLocale(settings.speechLocale);
-    voiceCapture.setAudioRecording(settings.voiceInputMode === 'direct-audio');
-
-    voiceCapture.start();
+    voiceCapture.start({
+      speechEngine: settings.speechEngine,
+      locale: settings.speechLocale,
+      directAudioRouting: settings.directAudioRouting,
+      whisperKitModel: settings.whisperKitModel,
+    });
   });
 
   ipcMain.on('voice:stop', () => {
@@ -434,6 +436,51 @@ function setupIpcHandlers(): void {
   ipcMain.on('voice:cancel', () => {
     log('INFO', 'IPC: voice:cancel');
     voiceCapture?.cancel();
+  });
+
+  // WhisperKit model management handlers
+  ipcMain.handle('whisperkit:check', async () => {
+    log('INFO', 'IPC: whisperkit:check');
+    if (!voiceCapture) {
+      voiceCapture = new NativeVoiceCapture();
+      voiceEventUnsubscribe = voiceCapture.onEvent((event: VoiceEvent) => {
+        mainWindow?.webContents.send('voice:event', event);
+      });
+    }
+    return voiceCapture.checkAvailability('whisperkit');
+  });
+
+  ipcMain.handle('whisperkit:listModels', async () => {
+    log('INFO', 'IPC: whisperkit:listModels');
+    if (!voiceCapture) {
+      voiceCapture = new NativeVoiceCapture();
+      voiceEventUnsubscribe = voiceCapture.onEvent((event: VoiceEvent) => {
+        mainWindow?.webContents.send('voice:event', event);
+      });
+    }
+    try {
+      return await voiceCapture.whisperKitListModels();
+    } catch (err) {
+      log('ERROR', 'whisperkit:listModels failed:', err);
+      return { available: [], downloaded: [], default: 'base', supported: [] };
+    }
+  });
+
+  ipcMain.handle('whisperkit:downloadModel', async (_event, modelName: string) => {
+    log('INFO', 'IPC: whisperkit:downloadModel', modelName);
+    if (!voiceCapture) {
+      voiceCapture = new NativeVoiceCapture();
+      voiceEventUnsubscribe = voiceCapture.onEvent((event: VoiceEvent) => {
+        mainWindow?.webContents.send('voice:event', event);
+      });
+    }
+    try {
+      const success = await voiceCapture.whisperKitDownloadModel(modelName);
+      return { success };
+    } catch (err) {
+      log('ERROR', 'whisperkit:downloadModel failed:', err);
+      return { success: false, error: (err as Error).message };
+    }
   });
 
   // LLM settings handlers
@@ -499,7 +546,7 @@ function setupIpcHandlers(): void {
         focusedSessionId,
         managerSessionId,
         refineTranscript: llmSettings.refineTranscript,
-        audioPath: llmSettings.voiceInputMode === 'direct-audio' ? audioPath : undefined,
+        audioPath: llmSettings.directAudioRouting ? audioPath : undefined,
       });
 
       log('INFO', 'Voice routing result:', result);

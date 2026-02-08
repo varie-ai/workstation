@@ -62,28 +62,36 @@ export const SPEECH_LOCALES: Array<{ id: SpeechLocale; name: string }> = [
 // Settings
 // ============================================================================
 
-export type VoiceInputMode = 'apple-speech' | 'direct-audio';
+// Speech engine: which binary does speech-to-text
+export type SpeechEngine = 'apple-speech' | 'whisperkit';
+
+// Voice routing mode: how voice commands are routed to sessions
+export type VoiceRoutingMode = 'focused' | 'manager' | 'smart';
 
 export interface LLMSettings {
   provider: LLMProvider;
   model: string;
   apiKey: string;
-  enabled: boolean;
-  refineTranscript: boolean;  // Fix grammar, punctuation, project names
-  speechLocale: SpeechLocale; // Speech recognition language
-  voiceInputMode: VoiceInputMode; // apple-speech (fast, offline) or direct-audio (accurate, requires API)
-  confirmBeforeSend: boolean; // Wait for user to press Enter instead of auto-sending
+  voiceRoutingMode: VoiceRoutingMode; // How voice commands are routed
+  refineTranscript: boolean;      // Fix grammar, punctuation, project names
+  speechLocale: SpeechLocale;     // Speech recognition language
+  speechEngine: SpeechEngine;     // Which STT engine to use
+  directAudioRouting: boolean;    // Also save audio and send to LLM for routing (Gemini)
+  whisperKitModel: string;        // WhisperKit model variant (e.g. 'base', 'small', 'large-v3-turbo')
+  confirmBeforeSend: boolean;     // Wait for user to press Enter instead of auto-sending
 }
 
 export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   provider: 'anthropic',
   model: DEFAULT_MODELS.anthropic,
   apiKey: '',
-  enabled: false,
-  refineTranscript: true,     // On by default when LLM routing is enabled
-  speechLocale: 'auto',       // Auto-detect by default
-  voiceInputMode: 'apple-speech', // Default to fast offline mode
-  confirmBeforeSend: false,   // Default to auto-send (current behavior)
+  voiceRoutingMode: 'focused',    // Default: send to focused session
+  refineTranscript: true,         // On by default when LLM routing is enabled
+  speechLocale: 'auto',           // Auto-detect by default
+  speechEngine: 'apple-speech',   // Default to fast offline mode
+  directAudioRouting: false,      // Default off — route based on transcript text
+  whisperKitModel: 'base',       // Default WhisperKit model (74M params, ~150MB)
+  confirmBeforeSend: false,       // Default to auto-send (current behavior)
 };
 
 // ============================================================================

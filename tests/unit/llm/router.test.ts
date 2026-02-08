@@ -97,13 +97,15 @@ describe('routeVoiceCommand — provider creation', () => {
 
   it('falls back to manager when provider returns null (no API key)', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: false,
+      voiceRoutingMode: 'focused' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: '',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 
@@ -121,13 +123,15 @@ describe('routeVoiceCommand — provider creation', () => {
 
   it('creates Anthropic provider when configured', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: 'sk-test',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 
@@ -155,13 +159,15 @@ describe('routeVoiceCommand — provider creation', () => {
 
   it('creates OpenAI provider when configured', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'openai',
       model: 'gpt-5-mini',
       apiKey: 'sk-openai',
       refineTranscript: false,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 
@@ -186,13 +192,15 @@ describe('routeVoiceCommand — provider creation', () => {
 
   it('creates Google provider when configured', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'google',
       model: 'gemini-3-flash-preview',
       apiKey: 'goog-key',
       refineTranscript: false,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 
@@ -223,13 +231,15 @@ describe('routeVoiceCommand — decision handling', () => {
   function setupProvider(decision: any) {
     mockIsConfigured.mockReturnValue(true);
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: 'sk-test',
       refineTranscript: false,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
     vi.mocked(AnthropicProvider).mockImplementation(function() {
@@ -319,13 +329,15 @@ describe('routeVoiceCommand — error handling', () => {
   it('falls back to manager on API error', async () => {
     mockIsConfigured.mockReturnValue(true);
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: 'sk-test',
       refineTranscript: false,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
     vi.mocked(AnthropicProvider).mockImplementation(function() {
@@ -347,13 +359,15 @@ describe('routeVoiceCommand — error handling', () => {
   it('falls back to focused session when no manager on error', async () => {
     mockIsConfigured.mockReturnValue(true);
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: 'sk-test',
       refineTranscript: false,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
     vi.mocked(AnthropicProvider).mockImplementation(function() {
@@ -378,13 +392,15 @@ describe('routeVoiceCommand — error handling', () => {
 describe('testLLMConnection', () => {
   it('returns error when no API key', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: false,
+      voiceRoutingMode: 'focused' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: '',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 
@@ -395,13 +411,15 @@ describe('testLLMConnection', () => {
 
   it('returns success when provider test passes', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
       apiKey: 'sk-test',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
     vi.mocked(AnthropicProvider).mockImplementation(function() {
@@ -414,13 +432,15 @@ describe('testLLMConnection', () => {
 
   it('returns error message on provider failure', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'openai',
       model: 'gpt-5-mini',
       apiKey: 'sk-openai',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
     vi.mocked(OpenAIProvider).mockImplementation(function() {
@@ -434,13 +454,15 @@ describe('testLLMConnection', () => {
 
   it('returns unsupported for unknown provider', async () => {
     mockLoadSettings.mockReturnValue({
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'unknown-provider' as any,
       model: 'x',
       apiKey: 'key',
       refineTranscript: true,
       speechLocale: 'auto',
-      voiceInputMode: 'apple-speech',
+      speechEngine: 'apple-speech',
+      directAudioRouting: false,
+      whisperKitModel: 'base',
       confirmBeforeSend: false,
     });
 

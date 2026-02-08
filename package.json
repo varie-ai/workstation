@@ -1,6 +1,6 @@
 {
   "name": "varie-workstation",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Unified development environment for managing multiple Claude Code sessions",
   "main": "dist/main/index.js",
   "author": {
@@ -11,7 +11,9 @@
   "scripts": {
     "dev": "npm run build && NODE_ENV=development electron .",
     "build": "npm run build:native && npm run build:main && npm run build:preload && npm run build:renderer",
-    "build:native": "mkdir -p native/macos && cd native/macos && ([ -f speech-recognizer ] || swiftc -O -o speech-recognizer SpeechRecognizer.swift)",
+    "build:native": "npm run build:native:speech && npm run build:native:whisperkit",
+    "build:native:speech": "mkdir -p native/macos && cd native/macos && ([ -f speech-recognizer ] || swiftc -O -o speech-recognizer SpeechRecognizer.swift)",
+    "build:native:whisperkit": "cd native/macos/whisperkit-recognizer && ([ -f .build/release/whisperkit-recognizer ] || swift build -c release)",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --external:electron --external:node-pty --outfile=dist/main/index.js",
     "build:preload": "esbuild src/main/preload.ts --bundle --platform=node --external:electron --outfile=dist/main/preload.js",
     "build:renderer": "mkdir -p dist/renderer && esbuild src/renderer/index.ts --bundle --platform=browser --format=iife --outfile=dist/renderer/index.js && cp src/renderer/index.html dist/renderer/ && cp src/renderer/styles.css dist/renderer/",
@@ -85,6 +87,10 @@
       {
         "from": "native/macos/speech-recognizer",
         "to": "native/macos/speech-recognizer"
+      },
+      {
+        "from": "native/macos/whisperkit-recognizer/.build/release/whisperkit-recognizer",
+        "to": "native/macos/whisperkit-recognizer"
       },
       {
         "from": "plugin",

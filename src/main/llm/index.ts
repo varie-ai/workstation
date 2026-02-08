@@ -10,7 +10,7 @@ export {
   LLMSettings,
   ModelInfo,
   SpeechLocale,
-  VoiceInputMode,
+  SpeechEngine,
   RoutingConfidence,
   RoutingDecision,
   RoutingContext,

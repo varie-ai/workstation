@@ -720,6 +720,20 @@ body.resizing-row * {
   background: var(--border);
 }
 
+.whisperkit-model-row {
+  display: flex;
+  gap: 6px;
+}
+
+.whisperkit-model-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.whisperkit-model-row button {
+  white-space: nowrap;
+}
+
 .form-group select {
   width: 100%;
   padding: 8px 10px;
@@ -911,6 +925,17 @@ body.resizing-row * {
 #voice-bar[data-status="listening"] #voice-status-icon {
   background: #4ec9b0;
   box-shadow: 0 0 8px rgba(78, 201, 176, 0.5);
+}
+
+#voice-bar[data-status="buffering"] #voice-status-icon {
+  background: #4ec9b0;
+  box-shadow: 0 0 8px rgba(78, 201, 176, 0.5);
+  animation: pulse-green 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(78, 201, 176, 0.5); }
+  50% { opacity: 0.6; box-shadow: 0 0 4px rgba(78, 201, 176, 0.3); }
 }
 
 #voice-bar[data-status="recording"] #voice-status-icon {

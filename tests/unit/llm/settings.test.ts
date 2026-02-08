@@ -52,43 +52,73 @@ describe('loadLLMSettings', () => {
 
     expect(fs.existsSync(CONFIG_PATH)).toBe(true);
     expect(settings.provider).toBe('anthropic');
-    expect(settings.enabled).toBe(false);
+    expect(settings.voiceRoutingMode).toBe('focused');
   });
 
   it('returns defaults when config does not exist', () => {
     const settings = loadLLMSettings();
 
-    expect(settings.enabled).toBe(DEFAULT_LLM_SETTINGS.enabled);
+    expect(settings.voiceRoutingMode).toBe('focused');
     expect(settings.provider).toBe(DEFAULT_LLM_SETTINGS.provider);
     expect(settings.model).toBe(DEFAULT_LLM_SETTINGS.model);
     expect(settings.apiKey).toBe('');
     expect(settings.refineTranscript).toBe(true);
     expect(settings.speechLocale).toBe('auto');
-    expect(settings.voiceInputMode).toBe('apple-speech');
+    expect(settings.speechEngine).toBe('apple-speech');
+    expect(settings.directAudioRouting).toBe(false);
+    expect(settings.whisperKitModel).toBe('base');
     expect(settings.confirmBeforeSend).toBe(false);
   });
 
   it('loads valid YAML config', () => {
     fs.mkdirSync(VARIE_HOME, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, `
-enabled: true
+voiceRoutingMode: smart
 provider: openai
 model: gpt-5-mini
 apiKey: "sk-test-key"
 refineTranscript: false
 speechLocale: en-US
-voiceInputMode: apple-speech
+speechEngine: apple-speech
+directAudioRouting: true
 confirmBeforeSend: true
 `);
 
     const settings = loadLLMSettings();
-    expect(settings.enabled).toBe(true);
+    expect(settings.voiceRoutingMode).toBe('smart');
     expect(settings.provider).toBe('openai');
     expect(settings.model).toBe('gpt-5-mini');
     expect(settings.apiKey).toBe('sk-test-key');
     expect(settings.refineTranscript).toBe(false);
     expect(settings.speechLocale).toBe('en-US');
+    expect(settings.speechEngine).toBe('apple-speech');
+    expect(settings.directAudioRouting).toBe(true);
     expect(settings.confirmBeforeSend).toBe(true);
+  });
+
+  it('migrates old enabled=true to voiceRoutingMode=smart', () => {
+    fs.mkdirSync(VARIE_HOME, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, `
+enabled: true
+provider: openai
+model: gpt-5-mini
+apiKey: "sk-key"
+`);
+
+    const settings = loadLLMSettings();
+    expect(settings.voiceRoutingMode).toBe('smart');
+  });
+
+  it('migrates old alwaysSendToManager=true to voiceRoutingMode=manager', () => {
+    fs.mkdirSync(VARIE_HOME, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, `
+alwaysSendToManager: true
+provider: openai
+model: gpt-5-mini
+`);
+
+    const settings = loadLLMSettings();
+    expect(settings.voiceRoutingMode).toBe('manager');
   });
 
   it('uses defaults for missing fields', () => {
@@ -99,7 +129,7 @@ provider: anthropic
 `);
 
     const settings = loadLLMSettings();
-    expect(settings.enabled).toBe(true);
+    expect(settings.voiceRoutingMode).toBe('smart'); // migrated from enabled: true
     expect(settings.provider).toBe('anthropic');
     expect(settings.model).toBe(DEFAULT_LLM_SETTINGS.model);
     expect(settings.apiKey).toBe('');
@@ -137,14 +167,46 @@ speechLocale: invalid-locale
     expect(settings.speechLocale).toBe('auto');
   });
 
-  it('validates voice input mode', () => {
+  it('validates speech engine', () => {
     fs.mkdirSync(VARIE_HOME, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, `
-voiceInputMode: invalid-mode
+speechEngine: invalid-engine
 `);
 
     const settings = loadLLMSettings();
-    expect(settings.voiceInputMode).toBe('apple-speech');
+    expect(settings.speechEngine).toBe('apple-speech');
+  });
+
+  it('accepts whisperkit speech engine', () => {
+    fs.mkdirSync(VARIE_HOME, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, `
+speechEngine: whisperkit
+whisperKitModel: small
+`);
+
+    const settings = loadLLMSettings();
+    expect(settings.speechEngine).toBe('whisperkit');
+    expect(settings.whisperKitModel).toBe('small');
+  });
+
+  it('defaults whisperKitModel to base when missing', () => {
+    fs.mkdirSync(VARIE_HOME, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, `
+speechEngine: whisperkit
+`);
+
+    const settings = loadLLMSettings();
+    expect(settings.whisperKitModel).toBe('base');
+  });
+
+  it('defaults directAudioRouting to false', () => {
+    fs.mkdirSync(VARIE_HOME, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, `
+speechEngine: apple-speech
+`);
+
+    const settings = loadLLMSettings();
+    expect(settings.directAudioRouting).toBe(false);
   });
 
   it('caches settings after first load', () => {
@@ -187,7 +249,7 @@ describe('saveLLMSettings', () => {
 
     const newSettings = {
       ...DEFAULT_LLM_SETTINGS,
-      enabled: true,
+      voiceRoutingMode: 'smart' as const,
       provider: 'google' as const,
       model: 'gemini-3-flash-preview',
       apiKey: 'goog-key-123',
@@ -200,13 +262,33 @@ describe('saveLLMSettings', () => {
     clearSettingsCache();
 
     const loaded = loadLLMSettings();
-    expect(loaded.enabled).toBe(true);
+    expect(loaded.voiceRoutingMode).toBe('smart');
     expect(loaded.provider).toBe('google');
     expect(loaded.model).toBe('gemini-3-flash-preview');
     expect(loaded.apiKey).toBe('goog-key-123');
     expect(loaded.refineTranscript).toBe(false);
     expect(loaded.speechLocale).toBe('zh-CN');
     expect(loaded.confirmBeforeSend).toBe(true);
+  });
+
+  it('saves and reloads whisperkit settings correctly', () => {
+    loadLLMSettings();
+    clearSettingsCache();
+
+    const newSettings = {
+      ...DEFAULT_LLM_SETTINGS,
+      speechEngine: 'whisperkit' as const,
+      directAudioRouting: true,
+      whisperKitModel: 'large-v3-turbo',
+    };
+
+    saveLLMSettings(newSettings);
+    clearSettingsCache();
+
+    const loaded = loadLLMSettings();
+    expect(loaded.speechEngine).toBe('whisperkit');
+    expect(loaded.directAudioRouting).toBe(true);
+    expect(loaded.whisperKitModel).toBe('large-v3-turbo');
   });
 
   it('preserves YAML comments after save', () => {
@@ -224,12 +306,12 @@ describe('saveLLMSettings', () => {
   it('updates cache after save', () => {
     loadLLMSettings();
 
-    const newSettings = { ...DEFAULT_LLM_SETTINGS, enabled: true };
+    const newSettings = { ...DEFAULT_LLM_SETTINGS, voiceRoutingMode: 'smart' as const };
     saveLLMSettings(newSettings);
 
     // Should return cached (saved) settings without clearing
     const loaded = loadLLMSettings();
-    expect(loaded.enabled).toBe(true);
+    expect(loaded.voiceRoutingMode).toBe('smart');
   });
 });
 
@@ -238,17 +320,17 @@ describe('saveLLMSettings', () => {
 // ============================================================================
 
 describe('isLLMRoutingConfigured', () => {
-  it('returns false when disabled', () => {
-    loadLLMSettings(); // creates default (disabled, no key)
+  it('returns false when routing mode is focused', () => {
+    loadLLMSettings(); // creates default (focused, no key)
     clearSettingsCache();
 
     expect(isLLMRoutingConfigured()).toBe(false);
   });
 
-  it('returns false when enabled but no API key', () => {
+  it('returns false when smart but no API key', () => {
     fs.mkdirSync(VARIE_HOME, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, `
-enabled: true
+voiceRoutingMode: smart
 provider: anthropic
 model: claude-haiku-4-5
 apiKey: ""
@@ -257,10 +339,10 @@ apiKey: ""
     expect(isLLMRoutingConfigured()).toBe(false);
   });
 
-  it('returns true when enabled with API key', () => {
+  it('returns true when smart with API key', () => {
     fs.mkdirSync(VARIE_HOME, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, `
-enabled: true
+voiceRoutingMode: smart
 provider: anthropic
 model: claude-haiku-4-5
 apiKey: "sk-test"

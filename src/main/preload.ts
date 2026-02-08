@@ -23,28 +23,41 @@ export interface SessionInfo {
 
 // Voice event types
 export interface VoiceEvent {
-  type: 'status' | 'interim' | 'final' | 'error' | 'end' | 'available';
+  type: 'status' | 'interim' | 'final' | 'error' | 'end' | 'available' | 'progress' | 'models';
   status?: string;
   transcript?: string;
   confidence?: number;
   message?: string;
   available?: boolean;
-  audioPath?: string;  // Path to recorded audio (when audio recording enabled)
+  audioPath?: string;
+  progress?: number;
+  model?: string;
 }
 
 // LLM types
 export type LLMProvider = 'anthropic' | 'openai' | 'google';
 export type SpeechLocale = 'auto' | 'en-US' | 'zh-CN' | 'zh-TW' | 'ja-JP' | 'ko-KR' | 'es-ES' | 'fr-FR' | 'de-DE';
-export type VoiceInputMode = 'apple-speech' | 'direct-audio';
+export type SpeechEngine = 'apple-speech' | 'whisperkit';
+export type VoiceRoutingMode = 'focused' | 'manager' | 'smart';
 
 export interface LLMSettings {
   provider: LLMProvider;
   model: string;
   apiKey: string;
-  enabled: boolean;
+  voiceRoutingMode: VoiceRoutingMode;
   refineTranscript: boolean;
   speechLocale: SpeechLocale;
-  voiceInputMode: VoiceInputMode;
+  speechEngine: SpeechEngine;
+  directAudioRouting: boolean;
+  whisperKitModel: string;
+  confirmBeforeSend: boolean;
+}
+
+export interface WhisperKitModelsInfo {
+  available: string[];
+  downloaded: string[];
+  default: string;
+  supported: string[];
 }
 
 export interface ModelInfo {
@@ -83,6 +96,11 @@ export interface WorkstationAPI {
   voiceStop: () => void;
   voiceCancel: () => void;
   onVoiceEvent: (callback: (event: VoiceEvent) => void) => void;
+
+  // WhisperKit model management
+  whisperKitCheck: () => Promise<boolean>;
+  whisperKitListModels: () => Promise<WhisperKitModelsInfo>;
+  whisperKitDownloadModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
 
   // LLM settings
   llmGetSettings: () => Promise<LLMSettings>;
@@ -184,6 +202,14 @@ contextBridge.exposeInMainWorld('workstation', {
       callback(voiceEvent);
     });
   },
+
+  // WhisperKit model management
+  whisperKitCheck: () => ipcRenderer.invoke('whisperkit:check'),
+
+  whisperKitListModels: () => ipcRenderer.invoke('whisperkit:listModels'),
+
+  whisperKitDownloadModel: (modelName: string) =>
+    ipcRenderer.invoke('whisperkit:downloadModel', modelName),
 
   // LLM settings
   llmGetSettings: () => ipcRenderer.invoke('llm:getSettings'),

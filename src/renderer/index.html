@@ -121,11 +121,13 @@
       <h3>Voice Routing Settings</h3>
       <form id="voice-settings-form">
         <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="llm-enabled">
-            <span>Enable Smart Routing</span>
-          </label>
-          <span class="form-hint">When enabled, uses AI to route voice commands to the appropriate session</span>
+          <label for="voice-routing-mode">Voice Routing</label>
+          <select id="voice-routing-mode">
+            <option value="focused">Focused Session (default)</option>
+            <option value="manager">Always Send to Manager</option>
+            <option value="smart">Smart Routing (LLM, requires API key)</option>
+          </select>
+          <span class="form-hint" id="voice-routing-hint">Send voice commands to the currently focused session</span>
         </div>
 
         <div class="form-group">
@@ -133,7 +135,7 @@
             <input type="checkbox" id="llm-refine">
             <span>Refine Transcript</span>
           </label>
-          <span class="form-hint">Refine grammar, punctuation, misheard words</span>
+          <span class="form-hint">Refine grammar, punctuation, misheard words (smart routing only)</span>
         </div>
 
         <div class="form-group">
@@ -152,12 +154,32 @@
         </div>
 
         <div class="form-group">
-          <label for="voice-input-mode">Voice Input Mode</label>
-          <select id="voice-input-mode">
+          <label for="speech-engine">Speech Engine</label>
+          <select id="speech-engine">
             <option value="apple-speech">Apple Speech (fast, offline)</option>
-            <option value="direct-audio">Direct Audio to LLM (accurate, Gemini only)</option>
+            <option value="whisperkit">WhisperKit (accurate, offline, requires download)</option>
           </select>
-          <span class="form-hint">Direct audio sends recording to LLM for better accuracy</span>
+          <span class="form-hint" id="speech-engine-hint">Apple Speech: real-time transcription, fast startup</span>
+        </div>
+
+        <!-- WhisperKit model picker (visible only when whisperkit selected) -->
+        <div id="whisperkit-model-section" class="form-group hidden">
+          <label for="whisperkit-model">WhisperKit Model</label>
+          <div class="whisperkit-model-row">
+            <select id="whisperkit-model">
+              <!-- Populated dynamically from whisperkit:listModels -->
+            </select>
+            <button type="button" id="whisperkit-download-btn" class="secondary-btn">Download</button>
+          </div>
+          <span class="form-hint" id="whisperkit-model-status">Checking model status...</span>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="direct-audio-routing">
+            <span>Direct Audio Routing</span>
+          </label>
+          <span class="form-hint">Send audio to LLM for best accuracy and routing ability (Gemini only)</span>
         </div>
 
         <div class="form-group">

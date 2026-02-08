@@ -27,7 +27,7 @@ type RoutingDecisionType = RoutingDecision;
 function createProvider(): LLMProviderInterface | null {
   const settings = loadLLMSettings();
 
-  if (!settings.enabled || !settings.apiKey) {
+  if (settings.voiceRoutingMode !== 'smart' || !settings.apiKey) {
     return null;
   }
 

@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as YAML from 'yaml';
 import { log } from '../logger';
-import { LLMSettings, LLMProvider, SpeechLocale, VoiceInputMode, DEFAULT_LLM_SETTINGS, DEFAULT_MODELS, PROVIDER_MODELS, SPEECH_LOCALES } from './types';
+import { LLMSettings, LLMProvider, SpeechLocale, SpeechEngine, VoiceRoutingMode, DEFAULT_LLM_SETTINGS, DEFAULT_MODELS, PROVIDER_MODELS, SPEECH_LOCALES } from './types';
 
 // ============================================================================
 // Paths
@@ -25,9 +25,11 @@ const LLM_CONFIG_PATH = path.join(VARIE_HOME, 'llm-config.yaml');
 const CONFIG_TEMPLATE = `# Workstation - LLM Configuration
 # Used for voice command routing
 
-# Enable LLM-based smart routing
-# When disabled, voice commands go to the focused session
-enabled: false
+# Voice routing mode
+# - focused: Send to the focused session (default)
+# - manager: Always send to the manager session
+# - smart: Use LLM to route to the best matching session (requires API key)
+voiceRoutingMode: focused
 
 # Provider: anthropic | openai | google
 provider: anthropic
@@ -51,10 +53,20 @@ refineTranscript: true
 # "auto" enables mixed-language mode (e.g., Chinese with English project names)
 speechLocale: auto
 
-# Voice input mode
-# - apple-speech: Fast, offline. Uses Apple Speech for transcription, LLM for routing/refinement
-# - direct-audio: More accurate. Sends audio directly to LLM (Gemini only, requires API)
-voiceInputMode: apple-speech
+# Speech engine (which STT binary to use)
+# - apple-speech: Fast, offline. Real-time interim transcripts
+# - whisperkit: Accurate, offline. Batch mode (Whisper on Apple Silicon). Requires model download
+speechEngine: apple-speech
+
+# Direct audio routing
+# When true, also saves audio and sends to LLM for routing (Gemini only, requires API)
+# Works with both speech engines
+directAudioRouting: false
+
+# WhisperKit model (only used when speechEngine is whisperkit)
+# Options: base (default, ~150MB), small (~500MB), large-v3-turbo (~1.5GB)
+# Models are downloaded from settings before first use
+whisperKitModel: base
 
 # Confirm before send
 # When true, voice commands and dispatch type text but wait for user to press Enter
@@ -120,15 +132,27 @@ export function loadLLMSettings(): LLMSettings {
     const content = fs.readFileSync(LLM_CONFIG_PATH, 'utf-8');
     const parsed = YAML.parse(content);
 
+    // Migrate from old enabled/alwaysSendToManager booleans to voiceRoutingMode
+    let routingMode: VoiceRoutingMode = DEFAULT_LLM_SETTINGS.voiceRoutingMode;
+    if (isValidVoiceRoutingMode(parsed.voiceRoutingMode)) {
+      routingMode = parsed.voiceRoutingMode;
+    } else if (parsed.alwaysSendToManager === true) {
+      routingMode = 'manager';
+    } else if (parsed.enabled === true) {
+      routingMode = 'smart';
+    }
+
     // Validate and merge with defaults
     const settings: LLMSettings = {
-      enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_LLM_SETTINGS.enabled,
+      voiceRoutingMode: routingMode,
       provider: isValidProvider(parsed.provider) ? parsed.provider : DEFAULT_LLM_SETTINGS.provider,
       model: typeof parsed.model === 'string' ? parsed.model : DEFAULT_LLM_SETTINGS.model,
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : DEFAULT_LLM_SETTINGS.apiKey,
       refineTranscript: typeof parsed.refineTranscript === 'boolean' ? parsed.refineTranscript : DEFAULT_LLM_SETTINGS.refineTranscript,
       speechLocale: isValidSpeechLocale(parsed.speechLocale) ? parsed.speechLocale : DEFAULT_LLM_SETTINGS.speechLocale,
-      voiceInputMode: isValidVoiceInputMode(parsed.voiceInputMode) ? parsed.voiceInputMode : DEFAULT_LLM_SETTINGS.voiceInputMode,
+      speechEngine: isValidSpeechEngine(parsed.speechEngine) ? parsed.speechEngine : DEFAULT_LLM_SETTINGS.speechEngine,
+      directAudioRouting: typeof parsed.directAudioRouting === 'boolean' ? parsed.directAudioRouting : DEFAULT_LLM_SETTINGS.directAudioRouting,
+      whisperKitModel: typeof parsed.whisperKitModel === 'string' && parsed.whisperKitModel.length > 0 ? parsed.whisperKitModel : DEFAULT_LLM_SETTINGS.whisperKitModel,
       confirmBeforeSend: typeof parsed.confirmBeforeSend === 'boolean' ? parsed.confirmBeforeSend : DEFAULT_LLM_SETTINGS.confirmBeforeSend,
     };
 
@@ -139,7 +163,7 @@ export function loadLLMSettings(): LLMSettings {
     }
 
     cachedSettings = settings;
-    log('INFO', `Loaded LLM settings: provider=${settings.provider}, model=${settings.model}, enabled=${settings.enabled}`);
+    log('INFO', `Loaded LLM settings: provider=${settings.provider}, model=${settings.model}, routing=${settings.voiceRoutingMode}`);
     return settings;
   } catch (err) {
     log('ERROR', 'Failed to load LLM settings:', err);
@@ -162,9 +186,9 @@ export function saveLLMSettings(settings: LLMSettings): void {
     for (const line of lines) {
       const trimmed = line.trim();
 
-      // Update enabled
-      if (trimmed.startsWith('enabled:')) {
-        newLines.push(`enabled: ${settings.enabled}`);
+      // Update voiceRoutingMode (also match old 'enabled:' for migration)
+      if (trimmed.startsWith('voiceRoutingMode:') || trimmed.startsWith('enabled:')) {
+        newLines.push(`voiceRoutingMode: ${settings.voiceRoutingMode}`);
         continue;
       }
 
@@ -198,9 +222,21 @@ export function saveLLMSettings(settings: LLMSettings): void {
         continue;
       }
 
-      // Update voiceInputMode
-      if (trimmed.startsWith('voiceInputMode:')) {
-        newLines.push(`voiceInputMode: ${settings.voiceInputMode}`);
+      // Update speechEngine
+      if (trimmed.startsWith('speechEngine:')) {
+        newLines.push(`speechEngine: ${settings.speechEngine}`);
+        continue;
+      }
+
+      // Update directAudioRouting
+      if (trimmed.startsWith('directAudioRouting:')) {
+        newLines.push(`directAudioRouting: ${settings.directAudioRouting}`);
+        continue;
+      }
+
+      // Update whisperKitModel
+      if (trimmed.startsWith('whisperKitModel:')) {
+        newLines.push(`whisperKitModel: ${settings.whisperKitModel}`);
         continue;
       }
 
@@ -215,7 +251,7 @@ export function saveLLMSettings(settings: LLMSettings): void {
 
     fs.writeFileSync(LLM_CONFIG_PATH, newLines.join('\n'), 'utf-8');
     cachedSettings = settings;
-    log('INFO', `Saved LLM settings: provider=${settings.provider}, model=${settings.model}, enabled=${settings.enabled}`);
+    log('INFO', `Saved LLM settings: provider=${settings.provider}, model=${settings.model}, routing=${settings.voiceRoutingMode}`);
   } catch (err) {
     log('ERROR', 'Failed to save LLM settings:', err);
     throw err;
@@ -248,8 +284,12 @@ function isValidSpeechLocale(value: unknown): value is SpeechLocale {
   return SPEECH_LOCALES.some((l) => l.id === value);
 }
 
-function isValidVoiceInputMode(value: unknown): value is VoiceInputMode {
-  return value === 'apple-speech' || value === 'direct-audio';
+function isValidSpeechEngine(value: unknown): value is SpeechEngine {
+  return value === 'apple-speech' || value === 'whisperkit';
+}
+
+function isValidVoiceRoutingMode(value: unknown): value is VoiceRoutingMode {
+  return value === 'focused' || value === 'manager' || value === 'smart';
 }
 
 function isValidModel(provider: LLMProvider, model: string): boolean {
@@ -269,7 +309,7 @@ export function getModelsForProvider(provider: LLMProvider) {
  */
 export function isLLMRoutingConfigured(): boolean {
   const settings = loadLLMSettings();
-  return settings.enabled && settings.apiKey.length > 0;
+  return settings.voiceRoutingMode === 'smart' && settings.apiKey.length > 0;
 }
 
 // ============================================================================
