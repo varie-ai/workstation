@@ -43,6 +43,7 @@ npm-debug.log*
 .env.*.local
 
 # Native Swift build artifacts
+native/macos/speech-recognizer
 native/macos/whisperkit-recognizer/.build/
 
 # Electron
