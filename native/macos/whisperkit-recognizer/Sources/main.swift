@@ -13,6 +13,7 @@
  *   whisperkit-recognizer --check                            # Check if WhisperKit is available
  *   whisperkit-recognizer --list-models                      # List available & downloaded models
  *   whisperkit-recognizer --download-model openai_whisper-base  # Download a model
+ *   whisperkit-recognizer --warmup --model base               # Pre-compile CoreML model
  *
  * Output format (JSON lines, same protocol as speech-recognizer):
  *   {"type": "status", "status": "downloading", "model": "base"}
@@ -121,33 +122,8 @@ class WhisperKitRecognizer {
     ///
     /// For downloads: downloads first (user must wait), then starts recording.
     func start() async throws {
-        // WhisperKit uses Hub cache convention: <modelsDir>/models/argmaxinc/whisperkit-coreml/<variant>/
-        // Variant names are like "openai_whisper-base" but user passes short name "base".
-        // Resolve by scanning the cache directory for a matching variant.
-        let hubCacheBase = modelsDir + "/models/argmaxinc/whisperkit-coreml"
-        let fm = FileManager.default
-
-        // Try exact match first, then fuzzy match (short name within variant name)
-        let resolvedModelPath: String? = {
-            let exactPath = hubCacheBase + "/" + modelName
-            if Self.validateModelDirectory(exactPath) {
-                return exactPath
-            }
-            // Scan hub cache for a variant containing the model name
-            guard fm.fileExists(atPath: hubCacheBase),
-                  let contents = try? fm.contentsOfDirectory(atPath: hubCacheBase) else {
-                return nil
-            }
-            for name in contents where !name.hasPrefix(".") {
-                if name.contains(modelName) {
-                    let candidatePath = hubCacheBase + "/" + name
-                    if Self.validateModelDirectory(candidatePath) {
-                        return candidatePath
-                    }
-                }
-            }
-            return nil
-        }()
+        // Resolve model path using shared helper
+        let resolvedModelPath = resolveModelPath(model: modelName, modelsDir: modelsDir)
 
         let config: WhisperKitConfig
 
@@ -339,6 +315,36 @@ class WhisperKitRecognizer {
     }
 }
 
+// MARK: - Shared Helpers
+
+/// Resolve a model path from short name (e.g. "base") to full Hub cache path.
+/// Tries exact match first, then fuzzy match (short name within variant name).
+/// Returns nil if no matching model directory with valid weights is found.
+func resolveModelPath(model: String, modelsDir: String) -> String? {
+    let hubCacheBase = modelsDir + "/models/argmaxinc/whisperkit-coreml"
+    let fm = FileManager.default
+
+    // Try exact match first
+    let exactPath = hubCacheBase + "/" + model
+    if WhisperKitRecognizer.validateModelDirectory(exactPath) {
+        return exactPath
+    }
+    // Scan hub cache for a variant containing the model name
+    guard fm.fileExists(atPath: hubCacheBase),
+          let contents = try? fm.contentsOfDirectory(atPath: hubCacheBase) else {
+        return nil
+    }
+    for name in contents where !name.hasPrefix(".") {
+        if name.contains(model) {
+            let candidatePath = hubCacheBase + "/" + name
+            if WhisperKitRecognizer.validateModelDirectory(candidatePath) {
+                return candidatePath
+            }
+        }
+    }
+    return nil
+}
+
 // MARK: - Commands
 
 func handleCheck() {
@@ -417,6 +423,35 @@ func handleDownloadModel(name: String, modelsDir: String) {
     RunLoop.main.run()
 }
 
+func handleWarmup(model: String, modelsDir: String) {
+    Task {
+        guard let modelPath = resolveModelPath(model: model, modelsDir: modelsDir) else {
+            outputError("Model not found: \(model). Download it first with --download-model.")
+            exit(1)
+        }
+
+        outputStatus("compiling", extra: ["model": model])
+
+        do {
+            let config = WhisperKitConfig(
+                modelFolder: modelPath,
+                verbose: false,
+                logLevel: .error,
+                download: false
+            )
+            // This triggers CoreML compilation if not yet cached
+            _ = try await WhisperKit(config)
+
+            outputStatus("ready", extra: ["model": model])
+        } catch {
+            outputError("Warmup failed: \(error.localizedDescription)")
+        }
+        outputEnd()
+        exit(0)
+    }
+    RunLoop.main.run()
+}
+
 func handleTranscribe(model: String, modelsDir: String, locale: String?, audioOutput: String?) {
     let recognizer = WhisperKitRecognizer(
         model: model,
@@ -484,6 +519,8 @@ if args.contains("--check") {
     handleListModels(modelsDir: modelsDir)
 } else if let downloadModel = getArg("--download-model") {
     handleDownloadModel(name: downloadModel, modelsDir: modelsDir)
+} else if args.contains("--warmup") {
+    handleWarmup(model: model, modelsDir: modelsDir)
 } else {
     // Default: transcription mode (record → SIGTERM → transcribe → exit)
     handleTranscribe(model: model, modelsDir: modelsDir, locale: locale, audioOutput: audioOutput)

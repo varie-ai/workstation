@@ -82,6 +82,11 @@ interface WorkstationAPI {
   llmGetProviders: () => Promise<Record<LLMProvider, ModelInfo[]>>;
   llmGetSpeechLocales: () => Promise<SpeechLocaleInfo[]>;
   llmIsRoutingAvailable: () => Promise<boolean>;
+  // WhisperKit
+  whisperKitDownloadModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
+  whisperKitDeleteModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
+  whisperKitListModels: () => Promise<{ available: string[]; downloaded: string[]; default: string; supported: string[] }>;
+  whisperKitWarmup: (modelName: string) => Promise<{ success: boolean; error?: string }>;
   // Voice routing
   voiceRoute: (voiceInput: string, focusedSessionId?: string, audioPath?: string) => Promise<{
     targetSessionId: string;
@@ -90,6 +95,7 @@ interface WorkstationAPI {
     usedLLM: boolean;
     refinedTranscript?: string;
   }>;
+  confirmDialog: (message: string, detail?: string) => Promise<boolean>;
   quit: () => void;
 }
 
@@ -1656,6 +1662,7 @@ async function setupVoiceCapture(): Promise<void> {
           downloading: 'Downloading model...',
           loading: 'Loading model...',
           transcribing: 'Transcribing...',
+          compiling: 'Model compiling, please wait...',
         };
         if (voiceStatusText) {
           voiceStatusText.textContent = statusMessages[event.status] || event.status;
@@ -1670,6 +1677,15 @@ async function setupVoiceCapture(): Promise<void> {
         if (event.status === 'idle') {
           isVoiceCapturing = false;
           showCancelBtn(false);
+        }
+        // Update settings modal for compiling/ready status
+        if (event.status === 'compiling' || event.status === 'ready') {
+          const modelStatusEl = document.getElementById('whisperkit-model-status');
+          if (modelStatusEl) {
+            modelStatusEl.textContent = event.status === 'compiling'
+              ? 'Compiling model for your device...'
+              : 'Model ready';
+          }
         }
         break;
 
@@ -1738,6 +1754,7 @@ async function setupVoiceCapture(): Promise<void> {
         }
         break;
       }
+
     }
   });
 
@@ -1849,6 +1866,7 @@ async function showVoiceSettingsModal(): Promise<void> {
   const whisperKitModelSection = document.getElementById('whisperkit-model-section');
   const whisperKitModelSelect = document.getElementById('whisperkit-model') as HTMLSelectElement | null;
   const whisperKitDownloadBtn = document.getElementById('whisperkit-download-btn') as HTMLButtonElement | null;
+  const whisperKitDeleteBtn = document.getElementById('whisperkit-delete-btn') as HTMLButtonElement | null;
   const whisperKitModelStatus = document.getElementById('whisperkit-model-status');
   let downloadedModels: string[] = [];
   let isDownloading = false;
@@ -1923,7 +1941,7 @@ async function showVoiceSettingsModal(): Promise<void> {
     };
   };
 
-  // Update whisperkit model status text and download button
+  // Update whisperkit model status text, download button, and delete button
   const updateWhisperKitModelStatus = () => {
     if (!whisperKitModelSelect || !whisperKitModelStatus || !whisperKitDownloadBtn) return;
     const selectedModel = whisperKitModelSelect.value;
@@ -1936,10 +1954,12 @@ async function showVoiceSettingsModal(): Promise<void> {
       whisperKitModelStatus.textContent = 'Model downloaded and ready';
       whisperKitDownloadBtn.textContent = 'Downloaded';
       whisperKitDownloadBtn.disabled = true;
+      whisperKitDeleteBtn?.classList.remove('hidden');
     } else {
       whisperKitModelStatus.textContent = 'Model not downloaded';
       whisperKitDownloadBtn.textContent = 'Download';
       whisperKitDownloadBtn.disabled = false;
+      whisperKitDeleteBtn?.classList.add('hidden');
     }
   };
 
@@ -2010,8 +2030,22 @@ async function showVoiceSettingsModal(): Promise<void> {
       isDownloading = false;
       if (result.success) {
         downloadedModels.push(modelName);
-        whisperKitModelStatus.textContent = 'Model downloaded and ready';
-        whisperKitDownloadBtn.textContent = 'Downloaded';
+        // Chain warmup (CoreML compilation) after download
+        whisperKitModelStatus.textContent = 'Compiling model for your device...';
+        whisperKitDownloadBtn.textContent = 'Compiling...';
+        try {
+          const warmupResult = await window.workstation.whisperKitWarmup(modelName);
+          if (warmupResult.success) {
+            whisperKitModelStatus.textContent = 'Model ready';
+            whisperKitDownloadBtn.textContent = 'Ready';
+          } else {
+            whisperKitModelStatus.textContent = 'Downloaded (will compile on first use)';
+            whisperKitDownloadBtn.textContent = 'Downloaded';
+          }
+        } catch {
+          whisperKitModelStatus.textContent = 'Downloaded (will compile on first use)';
+          whisperKitDownloadBtn.textContent = 'Downloaded';
+        }
         whisperKitDownloadBtn.disabled = true;
       } else {
         whisperKitModelStatus.textContent = 'Download failed: ' + (result.error || 'unknown error');
@@ -2026,6 +2060,34 @@ async function showVoiceSettingsModal(): Promise<void> {
     }
   };
   whisperKitDownloadBtn?.addEventListener('click', whisperKitDownloadHandler);
+
+  // Handle whisperkit delete button
+  const whisperKitDeleteHandler = async () => {
+    if (!whisperKitModelSelect || !whisperKitModelStatus) return;
+    const modelName = whisperKitModelSelect.value;
+    const confirmed = await window.workstation.confirmDialog(
+      `Delete model "${modelName}"?`,
+      'The downloaded model files and compiled cache will be removed. You can re-download it later.'
+    );
+    if (!confirmed) return;
+    whisperKitModelStatus.textContent = 'Deleting model...';
+    if (whisperKitDeleteBtn) whisperKitDeleteBtn.disabled = true;
+    try {
+      const result = await window.workstation.whisperKitDeleteModel(modelName);
+      if (result.success) {
+        downloadedModels = downloadedModels.filter(d => !d.includes(modelName));
+        updateWhisperKitModelStatus();
+        // Refresh model list to update "(downloaded)" labels
+        refreshWhisperKitModels();
+      } else {
+        whisperKitModelStatus.textContent = 'Delete failed: ' + (result.error || 'unknown error');
+      }
+    } catch (err) {
+      whisperKitModelStatus.textContent = 'Delete failed';
+    }
+    if (whisperKitDeleteBtn) whisperKitDeleteBtn.disabled = false;
+  };
+  whisperKitDeleteBtn?.addEventListener('click', whisperKitDeleteHandler);
 
   // Handle direct audio routing change — locks provider to Google when checked
   const directAudioChangeHandler = () => {
@@ -2102,7 +2164,13 @@ async function showVoiceSettingsModal(): Promise<void> {
             const isDownloaded = (info.downloaded || []).some((d: string) => d.includes(newSettings.whisperKitModel));
             if (!isDownloaded) {
               window.log.info('Auto-downloading WhisperKit model:', newSettings.whisperKitModel);
-              window.workstation.whisperKitDownloadModel(newSettings.whisperKitModel);
+              window.workstation.whisperKitDownloadModel(newSettings.whisperKitModel)
+                .then((dlResult) => {
+                  if (dlResult.success) {
+                    window.log.info('Auto-download complete, triggering warmup');
+                    window.workstation.whisperKitWarmup(newSettings.whisperKitModel).catch(() => {});
+                  }
+                });
             }
           } catch {
             // Non-blocking — user can download manually later
@@ -2156,6 +2224,7 @@ async function showVoiceSettingsModal(): Promise<void> {
     directAudioCheckbox.removeEventListener('change', directAudioChangeHandler);
     whisperKitModelSelect?.removeEventListener('change', whisperKitModelChangeHandler);
     whisperKitDownloadBtn?.removeEventListener('click', whisperKitDownloadHandler);
+    whisperKitDeleteBtn?.removeEventListener('click', whisperKitDeleteHandler);
     toggleKeyBtn?.removeEventListener('click', toggleKeyHandler);
     testBtn?.removeEventListener('click', testHandler);
     form.removeEventListener('submit', submitHandler);

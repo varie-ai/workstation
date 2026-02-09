@@ -17,7 +17,7 @@ import { app } from 'electron';
 import { log } from './logger';
 import { SpeechEngine } from './llm/types';
 
-export type VoiceStatus = 'idle' | 'listening' | 'recording' | 'processing' | 'downloading' | 'loading' | 'buffering' | 'transcribing' | 'error';
+export type VoiceStatus = 'idle' | 'listening' | 'recording' | 'processing' | 'downloading' | 'loading' | 'buffering' | 'transcribing' | 'compiling' | 'error';
 
 export interface VoiceEvent {
   type: 'status' | 'interim' | 'final' | 'error' | 'end' | 'available' | 'progress' | 'models';
@@ -60,6 +60,7 @@ const WHISPERKIT_MODELS_DIR = path.join(os.homedir(), '.varie', 'models', 'whisp
  */
 export class NativeVoiceCapture {
   private process: ChildProcess | null = null;
+  private warmupProcess: ChildProcess | null = null;
   private callbacks: VoiceEventCallback[] = [];
   private currentAudioPath: string | null = null;
 
@@ -203,6 +204,12 @@ export class NativeVoiceCapture {
   start(options: VoiceStartOptions): boolean {
     if (this.process) {
       log('WARN', 'Voice capture already running');
+      return false;
+    }
+
+    if (this.warmupProcess) {
+      log('WARN', 'Model is compiling, cannot start voice capture yet');
+      this.emit({ type: 'status', status: 'compiling' as VoiceStatus });
       return false;
     }
 
@@ -433,6 +440,118 @@ export class NativeVoiceCapture {
 
         proc.on('error', (err) => reject(err));
       } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * Delete a downloaded WhisperKit model and its CoreML compiled cache.
+   * Removes the model directory from the Hub cache and clears the system CoreML cache.
+   */
+  async whisperKitDeleteModel(modelName: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const hubCacheBase = path.join(WHISPERKIT_MODELS_DIR, 'models', 'argmaxinc', 'whisperkit-coreml');
+
+      // Find the model directory (exact or fuzzy match)
+      let modelDir: string | null = null;
+      const exactPath = path.join(hubCacheBase, modelName);
+      if (fs.existsSync(exactPath)) {
+        modelDir = exactPath;
+      } else if (fs.existsSync(hubCacheBase)) {
+        const entries = fs.readdirSync(hubCacheBase);
+        for (const entry of entries) {
+          if (!entry.startsWith('.') && entry.includes(modelName)) {
+            modelDir = path.join(hubCacheBase, entry);
+            break;
+          }
+        }
+      }
+
+      if (!modelDir || !fs.existsSync(modelDir)) {
+        return { success: false, error: `Model "${modelName}" not found` };
+      }
+
+      log('INFO', `Deleting WhisperKit model: ${modelDir}`);
+      fs.rmSync(modelDir, { recursive: true, force: true });
+
+      // Also clear the CoreML compiled cache for this app
+      const coremlCache = path.join(os.homedir(), 'Library', 'Caches', 'whisperkit-recognizer');
+      if (fs.existsSync(coremlCache)) {
+        log('INFO', `Clearing CoreML compiled cache: ${coremlCache}`);
+        fs.rmSync(coremlCache, { recursive: true, force: true });
+      }
+
+      log('INFO', `WhisperKit model deleted: ${modelName}`);
+      return { success: true };
+    } catch (err) {
+      log('ERROR', 'Failed to delete WhisperKit model:', err);
+      return { success: false, error: (err as Error).message };
+    }
+  }
+
+  /**
+   * Check if a warmup (CoreML compilation) is in progress
+   */
+  isWarmingUp(): boolean {
+    return this.warmupProcess !== null;
+  }
+
+  /**
+   * Warmup a WhisperKit model (trigger CoreML compilation).
+   * Spawns whisperkit-recognizer --warmup --model <name> --models-dir <dir>.
+   * Emits compiling/ready status events via the event callback system.
+   */
+  async whisperKitWarmupModel(modelName: string): Promise<{ success: boolean; error?: string }> {
+    const binaryPath = this.resolveBinaryPath('whisperkit');
+    return new Promise((resolve, reject) => {
+      try {
+        if (!fs.existsSync(binaryPath)) {
+          reject(new Error('whisperkit-recognizer binary not found'));
+          return;
+        }
+        log('INFO', `Warming up WhisperKit model: ${modelName}`);
+        const proc = spawn(binaryPath, ['--warmup', '--model', modelName, '--models-dir', WHISPERKIT_MODELS_DIR]);
+        this.warmupProcess = proc;
+        let buffer = '';
+
+        proc.stdout.on('data', (data) => {
+          buffer += data.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line) as VoiceEvent;
+              this.emit(event);
+            } catch {
+              // skip
+            }
+          }
+        });
+
+        proc.stderr?.on('data', (data) => {
+          log('WARN', 'WhisperKit warmup stderr:', data.toString());
+        });
+
+        proc.on('close', (code) => {
+          this.warmupProcess = null;
+          if (code === 0) {
+            log('INFO', `WhisperKit model warmed up: ${modelName}`);
+            resolve({ success: true });
+          } else {
+            log('ERROR', `WhisperKit model warmup failed with code ${code}`);
+            resolve({ success: false, error: `Warmup exited with code ${code}` });
+          }
+        });
+
+        proc.on('error', (err) => {
+          this.warmupProcess = null;
+          reject(err);
+        });
+      } catch (err) {
+        this.warmupProcess = null;
         reject(err);
       }
     });

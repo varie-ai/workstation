@@ -381,6 +381,20 @@ function setupIpcHandlers(): void {
     return enabled;
   });
 
+  // Native confirm dialog (shows app icon instead of generic Electron icon)
+  ipcMain.handle('dialog:confirm', async (_event, { message, detail }: { message: string; detail?: string }) => {
+    if (!mainWindow) return false;
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Cancel', 'Delete'],
+      defaultId: 0,
+      cancelId: 0,
+      message,
+      detail,
+    });
+    return result.response === 1;
+  });
+
   // Quit app
   ipcMain.on('app:quit', () => {
     log('INFO', 'IPC: app:quit');
@@ -479,6 +493,33 @@ function setupIpcHandlers(): void {
       return { success };
     } catch (err) {
       log('ERROR', 'whisperkit:downloadModel failed:', err);
+      return { success: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('whisperkit:deleteModel', async (_event, modelName: string) => {
+    log('INFO', 'IPC: whisperkit:deleteModel', modelName);
+    if (!voiceCapture) {
+      voiceCapture = new NativeVoiceCapture();
+      voiceEventUnsubscribe = voiceCapture.onEvent((event: VoiceEvent) => {
+        mainWindow?.webContents.send('voice:event', event);
+      });
+    }
+    return voiceCapture.whisperKitDeleteModel(modelName);
+  });
+
+  ipcMain.handle('whisperkit:warmup', async (_event, modelName: string) => {
+    log('INFO', 'IPC: whisperkit:warmup', modelName);
+    if (!voiceCapture) {
+      voiceCapture = new NativeVoiceCapture();
+      voiceEventUnsubscribe = voiceCapture.onEvent((event: VoiceEvent) => {
+        mainWindow?.webContents.send('voice:event', event);
+      });
+    }
+    try {
+      return await voiceCapture.whisperKitWarmupModel(modelName);
+    } catch (err) {
+      log('ERROR', 'whisperkit:warmup failed:', err);
       return { success: false, error: (err as Error).message };
     }
   });
@@ -588,6 +629,32 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+
+  // Startup warmup: if WhisperKit is configured, pre-compile the model in background
+  // This handles edge cases like cache-cleared or model-switch scenarios
+  setTimeout(() => {
+    try {
+      const settings = loadLLMSettings();
+      if (settings.speechEngine === 'whisperkit' && settings.whisperKitModel) {
+        log('INFO', `Startup warmup: pre-compiling WhisperKit model "${settings.whisperKitModel}"`);
+        if (!voiceCapture) {
+          voiceCapture = new NativeVoiceCapture();
+          voiceCapture.onEvent((event: VoiceEvent) => {
+            mainWindow?.webContents.send('voice:event', event);
+          });
+        }
+        voiceCapture.whisperKitWarmupModel(settings.whisperKitModel)
+          .then((result) => {
+            log('INFO', 'Startup warmup result:', result.success ? 'ready' : result.error);
+          })
+          .catch((err) => {
+            log('WARN', 'Startup warmup failed (non-blocking):', err);
+          });
+      }
+    } catch (err) {
+      log('WARN', 'Startup warmup check failed:', err);
+    }
+  }, 5000);
 });
 
 app.on('window-all-closed', () => {

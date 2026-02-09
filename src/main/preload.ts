@@ -101,6 +101,8 @@ export interface WorkstationAPI {
   whisperKitCheck: () => Promise<boolean>;
   whisperKitListModels: () => Promise<WhisperKitModelsInfo>;
   whisperKitDownloadModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
+  whisperKitDeleteModel: (modelName: string) => Promise<{ success: boolean; error?: string }>;
+  whisperKitWarmup: (modelName: string) => Promise<{ success: boolean; error?: string }>;
 
   // LLM settings
   llmGetSettings: () => Promise<LLMSettings>;
@@ -122,6 +124,9 @@ export interface WorkstationAPI {
   // Config
   getSkipPermissions: () => Promise<boolean>;
   setSkipPermissions: (enabled: boolean) => Promise<boolean>;
+
+  // Dialogs
+  confirmDialog: (message: string, detail?: string) => Promise<boolean>;
 
   // App control
   quit: () => void;
@@ -211,6 +216,12 @@ contextBridge.exposeInMainWorld('workstation', {
   whisperKitDownloadModel: (modelName: string) =>
     ipcRenderer.invoke('whisperkit:downloadModel', modelName),
 
+  whisperKitDeleteModel: (modelName: string) =>
+    ipcRenderer.invoke('whisperkit:deleteModel', modelName),
+
+  whisperKitWarmup: (modelName: string) =>
+    ipcRenderer.invoke('whisperkit:warmup', modelName),
+
   // LLM settings
   llmGetSettings: () => ipcRenderer.invoke('llm:getSettings'),
 
@@ -232,6 +243,10 @@ contextBridge.exposeInMainWorld('workstation', {
   // Config
   getSkipPermissions: () => ipcRenderer.invoke('config:getSkipPermissions'),
   setSkipPermissions: (enabled: boolean) => ipcRenderer.invoke('config:setSkipPermissions', enabled),
+
+  // Dialogs
+  confirmDialog: (message: string, detail?: string) =>
+    ipcRenderer.invoke('dialog:confirm', { message, detail }),
 
   // App control
   quit: () => ipcRenderer.send('app:quit'),

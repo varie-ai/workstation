@@ -1223,6 +1223,16 @@ body.resizing-row * {
   cursor: not-allowed;
 }
 
+.danger-btn {
+  color: #f87171;
+  border-color: #7f1d1d;
+}
+
+.danger-btn:hover {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
 .connection-status {
   display: inline-block;
   margin-left: 8px;
