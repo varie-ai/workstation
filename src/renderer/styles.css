@@ -651,8 +651,8 @@ body.resizing-row * {
   z-index: 1000;
 }
 
-.modal.hidden {
-  display: none;
+.hidden {
+  display: none !important;
 }
 
 .modal-content {
@@ -1249,4 +1249,57 @@ body.resizing-row * {
 
 .connection-status.testing {
   color: #dcdcaa;
+}
+
+/* Settings section divider */
+.settings-divider {
+  border-top: 1px solid var(--border);
+  margin: 16px 0 12px;
+}
+
+.settings-section-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+/* Relay status */
+.relay-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-dot.disconnected {
+  background-color: #858585;
+}
+
+.status-dot.connecting {
+  background-color: #dcdcaa;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot.connected,
+.status-dot.registered {
+  background-color: #4ec9b0;
+}
+
+.status-dot.error {
+  background-color: #f14c4c;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }

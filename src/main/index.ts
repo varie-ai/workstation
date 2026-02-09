@@ -19,7 +19,8 @@ import { SessionManager, TerminalSession } from './session-manager';
 import { CheckpointStore } from './checkpoint-store';
 import { Dispatcher } from './dispatcher';
 import { initManagerWorkspace, syncDiscoveredRepos } from './manager-workspace';
-import { getClaudeFlags, getSkipPermissions, setSkipPermissions, getMarketplacePluginInstall } from './config';
+import { getClaudeFlags, getSkipPermissions, setSkipPermissions, getMarketplacePluginInstall, getCloudRelayEnabled, setCloudRelayEnabled, getCloudRelayToken, setCloudRelayToken } from './config';
+import { RelayClient, RelayState, CommandResult, getMachineId } from './relay-client';
 import * as fs from 'fs';
 import * as managerState from './manager-state';
 import { NativeVoiceCapture, VoiceEvent } from './voice-native';
@@ -64,6 +65,7 @@ let sessionManager: SessionManager | null = null;
 let checkpointStore: CheckpointStore | null = null;
 let dispatcher: Dispatcher | null = null;
 let voiceCapture: NativeVoiceCapture | null = null;
+let relayClient: RelayClient | null = null;
 let isQuitting = false;  // Track if app is quitting (vs just hiding window)
 
 // ============================================================================
@@ -168,6 +170,30 @@ function resolveBundledPluginPath(): string | null {
 }
 
 // ============================================================================
+// Cloud Relay
+// ============================================================================
+
+/**
+ * Create a RelayClient with command forwarding to renderer.
+ * Relay commands flow through the same voice routing pipeline:
+ *   relay → main (IPC) → renderer handleRelayCommand → voice routing → terminal
+ */
+function createRelayClient(): RelayClient {
+  return new RelayClient(
+    sessionManager!,
+    // State change → forward to renderer
+    (state) => {
+      mainWindow?.webContents.send('relay:stateChanged', state);
+    },
+    // Command received → forward to renderer for voice-pipeline routing
+    (command, requestId, source) => {
+      log('INFO', `Relay command → renderer: requestId=${requestId}, source=${source}`);
+      mainWindow?.webContents.send('relay:command', { command, requestId, source });
+    },
+  );
+}
+
+// ============================================================================
 // Service Initialization
 // ============================================================================
 
@@ -221,6 +247,9 @@ function initServices(): void {
           mainWindow?.webContents.send('session:updated', sessionInfo);
           break;
       }
+
+      // Broadcast session changes to Cloud Relay (if connected)
+      relayClient?.broadcastSessionStatus();
     }
   );
 
@@ -250,6 +279,17 @@ function initServices(): void {
   socketServer.setDispatchHandler((event) => dispatcher!.handleCommand(event));
 
   socketServer.start();
+
+  // Initialize Cloud Relay client (opt-in via config)
+  const relayEnabled = getCloudRelayEnabled();
+  const relayToken = getCloudRelayToken();
+  if (relayEnabled && relayToken) {
+    log('INFO', 'Cloud Relay enabled, connecting...');
+    relayClient = createRelayClient();
+    relayClient.connect(relayToken);
+  } else if (relayEnabled && !relayToken) {
+    log('WARN', 'Cloud Relay enabled but no token configured (cloudRelayToken). Skipping.');
+  }
 
   log('INFO', 'Services initialized');
 }
@@ -559,6 +599,57 @@ function setupIpcHandlers(): void {
     return isLLMRoutingAvailable();
   });
 
+  // Cloud Relay handlers
+  ipcMain.handle('relay:getState', async () => {
+    return relayClient?.getState() || {
+      status: 'disconnected',
+      connectionId: null,
+      machineId: getMachineId(),
+      lastHeartbeat: null,
+      reconnectAttempts: 0,
+      error: null,
+    } satisfies RelayState;
+  });
+
+  ipcMain.handle('relay:getEnabled', async () => {
+    return getCloudRelayEnabled();
+  });
+
+  ipcMain.handle('relay:setEnabled', async (_event, enabled: boolean) => {
+    log('INFO', `IPC: relay:setEnabled ${enabled}`);
+    setCloudRelayEnabled(enabled);
+    if (enabled) {
+      const token = getCloudRelayToken();
+      if (token) {
+        if (!relayClient) {
+          relayClient = createRelayClient();
+        }
+        relayClient.connect(token);
+      } else {
+        log('WARN', 'Relay enabled but no token set');
+      }
+    } else if (relayClient) {
+      relayClient.disconnect();
+    }
+    return enabled;
+  });
+
+  ipcMain.handle('relay:getToken', async () => {
+    return getCloudRelayToken();
+  });
+
+  ipcMain.handle('relay:setToken', async (_event, token: string) => {
+    log('INFO', 'IPC: relay:setToken');
+    setCloudRelayToken(token);
+    return token;
+  });
+
+  // Relay command result from renderer (after voice-pipeline routing)
+  ipcMain.on('relay:commandResult', (_event, result: CommandResult) => {
+    log('INFO', `Relay command result: requestId=${result.requestId}, status=${result.status}`);
+    relayClient?.reportCommandResult(result.requestId, result);
+  });
+
   // Voice routing - assembles context from sessions and calls LLM router
   ipcMain.handle('voice:route', async (_event, { voiceInput, focusedSessionId, audioPath }) => {
     log('INFO', 'IPC: voice:route', { voiceInput, focusedSessionId, audioPath: audioPath ? 'provided' : 'none' });
@@ -676,6 +767,7 @@ app.on('before-quit', () => {
   isQuitting = true;  // Allow window to actually close
   managerState.stopAutoSave();
   managerState.saveState();
+  relayClient?.destroy();
   sessionManager?.closeAllSessions();
   socketServer?.stop();
 });

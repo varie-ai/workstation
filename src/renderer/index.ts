@@ -96,6 +96,7 @@ interface WorkstationAPI {
     refinedTranscript?: string;
   }>;
   confirmDialog: (message: string, detail?: string) => Promise<boolean>;
+  getPathForFile: (file: File) => string;
   quit: () => void;
 }
 
@@ -293,7 +294,13 @@ function quotePathIfNeeded(path: string): string {
  * Dropped files have their paths inserted into the terminal.
  */
 function setupTerminalDragDrop(container: HTMLElement, sessionId: string): void {
-  // Prevent default drag behavior (would open file in browser)
+  // dragenter + dragover both need preventDefault for drop to fire reliably
+  container.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    container.classList.add('drag-over');
+  });
+
   container.addEventListener('dragover', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -303,7 +310,11 @@ function setupTerminalDragDrop(container: HTMLElement, sessionId: string): void 
   container.addEventListener('dragleave', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    container.classList.remove('drag-over');
+    // Only remove highlight when truly leaving the container, not entering a child
+    // (xterm.js creates many nested elements that trigger dragleave on transition)
+    if (!container.contains(e.relatedTarget as Node)) {
+      container.classList.remove('drag-over');
+    }
   });
 
   container.addEventListener('dragend', () => {
@@ -321,12 +332,12 @@ function setupTerminalDragDrop(container: HTMLElement, sessionId: string): void 
       return;
     }
 
-    // Extract file paths (Electron provides full paths)
+    // Extract file paths via webUtils (Electron 32+ API, replaces deprecated File.path)
     const paths: string[] = [];
     for (let i = 0; i < files.length; i++) {
-      const file = files[i] as File & { path?: string };
-      if (file.path) {
-        paths.push(quotePathIfNeeded(file.path));
+      const filePath = window.workstation.getPathForFile(files[i]);
+      if (filePath) {
+        paths.push(quotePathIfNeeded(filePath));
       }
     }
 
@@ -1829,6 +1840,13 @@ async function showVoiceSettingsModal(): Promise<void> {
   const cancelBtn = document.getElementById('cancel-voice-settings');
   const apiKeyHint = document.getElementById('api-key-hint');
 
+  // Cloud Relay elements
+  const relayEnabledCheckbox = document.getElementById('relay-enabled') as HTMLInputElement | null;
+  const relayTokenInput = document.getElementById('relay-token') as HTMLInputElement | null;
+  const relayConfigSection = document.getElementById('relay-config-section');
+  const relayStatusDot = document.getElementById('relay-status-dot');
+  const relayStatusText = document.getElementById('relay-status-text');
+
   if (!modal || !form || !voiceRoutingModeSelect || !refineCheckbox || !confirmBeforeSendCheckbox || !speechLocaleSelect || !speechEngineSelect || !directAudioCheckbox || !providerSelect || !modelSelect || !apiKeyInput) {
     window.log.error('Voice settings modal elements not found');
     return;
@@ -1896,6 +1914,35 @@ async function showVoiceSettingsModal(): Promise<void> {
   if (connectionStatus) {
     connectionStatus.textContent = '';
     connectionStatus.className = 'connection-status';
+  }
+
+  // Populate Cloud Relay settings
+  if (relayEnabledCheckbox && relayTokenInput) {
+    try {
+      const relayEnabled = await window.workstation.relayGetEnabled();
+      const relayToken = await window.workstation.relayGetToken();
+      const relayState = await window.workstation.relayGetState();
+
+      relayEnabledCheckbox.checked = relayEnabled;
+      relayTokenInput.value = relayToken || '';
+
+      // Show/hide config section
+      if (relayConfigSection) {
+        relayConfigSection.style.display = relayEnabled ? '' : 'none';
+      }
+
+      // Update status indicator
+      updateRelayStatusUI(relayState.status, relayStatusDot, relayStatusText);
+    } catch (err) {
+      window.log.warn('Could not load relay settings:', err);
+    }
+
+    // Toggle config section visibility
+    relayEnabledCheckbox.addEventListener('change', () => {
+      if (relayConfigSection) {
+        relayConfigSection.style.display = relayEnabledCheckbox.checked ? '' : 'none';
+      }
+    });
   }
 
   // Show modal
@@ -2153,6 +2200,18 @@ async function showVoiceSettingsModal(): Promise<void> {
 
     const newSettings = buildSettingsFromForm();
 
+    // Save relay settings
+    if (relayEnabledCheckbox && relayTokenInput) {
+      try {
+        const newToken = relayTokenInput.value.trim();
+        await window.workstation.relaySetToken(newToken);
+        await window.workstation.relaySetEnabled(relayEnabledCheckbox.checked);
+        window.log.info(`Relay settings saved: enabled=${relayEnabledCheckbox.checked}`);
+      } catch (err) {
+        window.log.error('Failed to save relay settings:', err);
+      }
+    }
+
     try {
       const result = await window.workstation.llmSaveSettings(newSettings);
       if (result.success) {
@@ -2239,6 +2298,25 @@ function hideVoiceSettingsModal(): void {
   modal?.classList.add('hidden');
 }
 
+function updateRelayStatusUI(
+  status: string,
+  dot: HTMLElement | null,
+  text: HTMLElement | null,
+): void {
+  if (dot) {
+    dot.className = 'status-dot ' + status;
+  }
+  if (text) {
+    const labels: Record<string, string> = {
+      disconnected: 'Disconnected',
+      connecting: 'Connecting...',
+      connected: 'Connected',
+      registered: 'Connected & Registered',
+    };
+    text.textContent = labels[status] || status;
+  }
+}
+
 function populateModels(
   select: HTMLSelectElement,
   models: ModelInfo[],
@@ -2285,18 +2363,25 @@ function updateApiKeyHint(hintEl: HTMLElement | null, provider: LLMProvider): vo
   hintEl.textContent = hints[provider] || 'Enter your API key';
 }
 
-async function handleVoiceCommand(transcript: string, audioPath?: string): Promise<void> {
-  if (!transcript.trim()) {
-    window.log.info('Voice command: empty transcript, skipping');
-    return;
-  }
+// ============================================================================
+// Command Routing (shared by voice + relay)
+// ============================================================================
 
-  window.log.info(`Voice command: "${transcript}", audioPath: ${audioPath || 'none'}`);
+interface RouteResult {
+  targetSessionId: string | undefined;
+  targetName: string;
+  refinedTranscript?: string;
+}
 
-  const voiceStatusText = document.getElementById('voice-status-text');
-  const voiceFinal = document.getElementById('voice-final');
-  const voiceInterim = document.getElementById('voice-interim');
-
+/**
+ * Determine which session a command should be routed to, based on voiceRoutingMode.
+ * Shared by local voice and relay command pipelines.
+ */
+async function routeCommand(
+  transcript: string,
+  audioPath?: string,
+  onStatus?: (text: string) => void,
+): Promise<RouteResult> {
   // Get focused session ID
   let focusedSessionId: string | undefined;
   let focusedName: string = '';
@@ -2329,24 +2414,24 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
       targetSessionId = orchestratorState.session.id;
       targetName = 'Manager';
     } else {
-      // No manager session — fall back to focused
       targetSessionId = focusedSessionId;
       targetName = focusedName;
     }
   } else if (llmSettings.voiceRoutingMode === 'smart') {
     // Use LLM-based routing
-    if (voiceStatusText) voiceStatusText.textContent = 'Routing...';
+    onStatus?.('Routing...');
 
     try {
       const result = await window.workstation.voiceRoute(transcript, focusedSessionId, audioPath);
-      window.log.info('Voice routing result:', result);
+      window.log.info('Routing result:', result);
 
       targetSessionId = result.targetSessionId;
 
       // Use refined transcript if available
+      let refinedTranscript: string | undefined;
       if (result.refinedTranscript) {
         window.log.info(`Using refined transcript: "${result.refinedTranscript}"`);
-        transcript = result.refinedTranscript;
+        refinedTranscript = result.refinedTranscript;
       }
 
       // Determine target name
@@ -2361,10 +2446,10 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
         }
       }
 
+      return { targetSessionId, targetName, refinedTranscript };
     } catch (err) {
-      window.log.error('Voice routing failed:', err);
-      if (voiceStatusText) voiceStatusText.textContent = 'Routing failed, sending to focused...';
-      // Fall back to focused session
+      window.log.error('Routing failed:', err);
+      onStatus?.('Routing failed, sending to focused...');
       targetSessionId = focusedSessionId;
       targetName = focusedName;
     }
@@ -2374,6 +2459,74 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
     targetName = focusedName;
   }
 
+  return { targetSessionId, targetName };
+}
+
+/**
+ * Send a command to a specific session's terminal.
+ * Handles confirmBeforeSend (auto-Enter) and session focus.
+ */
+async function sendCommandToSession(targetSessionId: string, transcript: string): Promise<void> {
+  // Bring target session to front if it's a hidden worker
+  const targetWorker = workers.get(targetSessionId);
+  if (targetWorker && targetWorker.gridPosition === undefined) {
+    window.log.info(`Routing: bringing hidden session ${targetSessionId} to front`);
+    swapTabToGrid(targetSessionId);
+  } else if (targetWorker) {
+    focusWorker(targetSessionId);
+  }
+
+  // Write to terminal
+  window.workstation.writeToTerminal(targetSessionId, transcript);
+
+  // Get confirmBeforeSend setting
+  let confirmBeforeSend = false;
+  try {
+    const settings = await window.workstation.llmGetSettings();
+    confirmBeforeSend = settings.confirmBeforeSend;
+  } catch (err) {
+    window.log.warn('Could not get confirmBeforeSend setting:', err);
+  }
+
+  // When confirmBeforeSend is false, auto-press Enter after typing
+  // (xterm/Claude needs text and Enter to be separate writes)
+  // 150ms allows Claude input handler to fully process command text
+  // See ISSUE-030: 50ms was occasionally insufficient
+  if (!confirmBeforeSend) {
+    setTimeout(() => {
+      window.workstation.writeToTerminal(targetSessionId, '\r');
+      window.log.info(`Sent Enter key for: "${transcript.substring(0, 30)}..."`);
+    }, 150);
+  }
+
+  return;
+}
+
+/**
+ * Handle a local voice command. Uses shared routing + voice bar UI updates.
+ */
+async function handleVoiceCommand(transcript: string, audioPath?: string): Promise<void> {
+  if (!transcript.trim()) {
+    window.log.info('Voice command: empty transcript, skipping');
+    return;
+  }
+
+  window.log.info(`Voice command: "${transcript}", audioPath: ${audioPath || 'none'}`);
+
+  const voiceStatusText = document.getElementById('voice-status-text');
+  const voiceFinal = document.getElementById('voice-final');
+  const voiceInterim = document.getElementById('voice-interim');
+
+  // Route using shared logic, with voice bar status updates
+  const result = await routeCommand(
+    transcript,
+    audioPath,
+    (status) => { if (voiceStatusText) voiceStatusText.textContent = status; },
+  );
+
+  const { targetSessionId, targetName } = result;
+  const finalTranscript = result.refinedTranscript || transcript;
+
   // Check if cancelled during routing
   if (voiceProcessingCancelled) {
     window.log.info('Voice: routing cancelled by user');
@@ -2381,46 +2534,19 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
   }
 
   if (targetSessionId && targetSessionId !== 'unknown') {
-    // Show sending status — hide cancel since we're about to dispatch
     if (voiceStatusText) voiceStatusText.textContent = `Sending to ${targetName}...`;
     document.getElementById('voice-cancel-btn')?.classList.add('hidden');
 
-    // Bring target session to front if it's a hidden worker
-    const targetWorker = workers.get(targetSessionId);
-    if (targetWorker && targetWorker.gridPosition === undefined) {
-      // Session is in overflow tabs - swap to grid
-      window.log.info(`Voice routing: bringing hidden session ${targetSessionId} to front`);
-      swapTabToGrid(targetSessionId);
-    } else if (targetWorker) {
-      // Session is in grid - just focus it
-      focusWorker(targetSessionId);
-    }
+    await sendCommandToSession(targetSessionId, finalTranscript);
 
-    // Send to target session's terminal
-    window.workstation.writeToTerminal(targetSessionId, transcript);
-
-    // Get confirmBeforeSend setting
+    // Get confirmBeforeSend for UI display
     let confirmBeforeSend = false;
     try {
-      const llmSettings = await window.workstation.llmGetSettings();
-      confirmBeforeSend = llmSettings.confirmBeforeSend;
-    } catch (err) {
-      window.log.warn('Could not get confirmBeforeSend setting:', err);
-    }
+      const settings = await window.workstation.llmGetSettings();
+      confirmBeforeSend = settings.confirmBeforeSend;
+    } catch {}
 
-    // When confirmBeforeSend is false, auto-press Enter after typing
-    // (xterm/Claude needs text and Enter to be separate writes)
-    // 150ms allows Claude input handler to fully process command text
-    // See ISSUE-030: 50ms was occasionally insufficient
-    const shouldAutoSend = !confirmBeforeSend;
-    if (shouldAutoSend) {
-      setTimeout(() => {
-        window.workstation.writeToTerminal(targetSessionId, '\r');
-        window.log.info(`Sent Enter key for: "${transcript.substring(0, 30)}..."`);
-      }, 150);
-    }
-
-    window.log.info(`Sent to ${targetName}: "${transcript}"${shouldAutoSend ? ' [auto-enter]' : ' [waiting for Enter]'}`);
+    window.log.info(`Sent to ${targetName}: "${finalTranscript}"${!confirmBeforeSend ? ' [auto-enter]' : ' [waiting for Enter]'}`);
 
     // Clear transcript display
     if (voiceFinal) voiceFinal.textContent = '';
@@ -2429,18 +2555,16 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
     // Update voice bar to show where it was sent
     const voiceBar = document.getElementById('voice-bar');
     if (voiceStatusText) {
-      if (shouldAutoSend) {
+      if (!confirmBeforeSend) {
         voiceStatusText.textContent = `Sent to ${targetName}`;
       } else {
-        // When confirmBeforeSend is true, prompt user to press Enter
         voiceStatusText.textContent = `Typed in ${targetName} - press Enter to send`;
       }
-      // Reset after delay (longer for confirm mode so user sees instruction)
       setTimeout(() => {
         isVoiceProcessing = false;
         if (voiceBar) voiceBar.dataset.status = 'idle';
         voiceStatusText.textContent = 'Ctrl+V to speak';
-      }, shouldAutoSend ? 2000 : 4000);
+      }, !confirmBeforeSend ? 2000 : 4000);
     } else {
       isVoiceProcessing = false;
       if (voiceBar) voiceBar.dataset.status = 'idle';
@@ -2460,6 +2584,66 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
       isVoiceProcessing = false;
       if (voiceBar) voiceBar.dataset.status = 'idle';
     }
+  }
+}
+
+/**
+ * Handle a command from the Cloud Relay (mobile).
+ * Uses the same routing pipeline as local voice — respects voiceRoutingMode,
+ * confirmBeforeSend, and LLM routing. No voice bar UI changes.
+ */
+async function handleRelayCommand(command: string, requestId: string, source: string): Promise<void> {
+  window.log.info(`Relay command: "${command.substring(0, 80)}", requestId=${requestId}, source=${source}`);
+
+  if (!command.trim()) {
+    window.workstation.relayCommandResult({
+      requestId,
+      status: 'error',
+      message: 'Empty command',
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  try {
+    const result = await routeCommand(command);
+    const { targetSessionId, targetName } = result;
+    const finalTranscript = result.refinedTranscript || command;
+
+    if (targetSessionId && targetSessionId !== 'unknown') {
+      await sendCommandToSession(targetSessionId, finalTranscript);
+
+      // Look up repo for the result
+      const targetWorker = workers.get(targetSessionId);
+      const sessionRepo = targetWorker?.session.repo || '';
+
+      window.log.info(`Relay command routed to ${targetName}: "${finalTranscript.substring(0, 40)}..."`);
+
+      window.workstation.relayCommandResult({
+        requestId,
+        status: 'routed',
+        sessionId: targetSessionId,
+        sessionRepo,
+        message: `Sent to ${targetName}`,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      window.log.warn('Relay command: no session available');
+      window.workstation.relayCommandResult({
+        requestId,
+        status: 'error',
+        message: 'No session available',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    window.log.error('Relay command routing failed:', err);
+    window.workstation.relayCommandResult({
+      requestId,
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Unknown error',
+      timestamp: new Date().toISOString(),
+    });
   }
 }
 
@@ -2649,6 +2833,20 @@ function setupIPCHandlers(): void {
   // Plugin events
   window.workstation.onPluginEvent((event) => {
     window.log.info('Plugin event:', event);
+  });
+
+  // Cloud Relay commands — route through voice pipeline
+  window.workstation.onRelayCommand((data) => {
+    handleRelayCommand(data.command, data.requestId, data.source);
+  });
+
+  // Cloud Relay status updates — update settings modal if open
+  window.workstation.onRelayStateChange((state: any) => {
+    const dot = document.getElementById('relay-status-dot');
+    const text = document.getElementById('relay-status-text');
+    if (dot || text) {
+      updateRelayStatusUI(state.status || 'disconnected', dot, text);
+    }
   });
 
   // Window show - refresh all terminals (ISSUE-040: fix cursor position after window hide/show)

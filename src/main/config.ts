@@ -60,6 +60,84 @@ function writeConfigBool(key: string, value: boolean): void {
 }
 
 /**
+ * Read a string setting from ~/.varie/config.yaml.
+ * Returns defaultValue if the key is not found.
+ */
+function readConfigString(key: string, defaultValue: string): string {
+  try {
+    if (!fs.existsSync(CONFIG_PATH)) return defaultValue;
+    const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    const regex = new RegExp(`^${key}:\\s*(.+)$`, 'm');
+    const match = content.match(regex);
+    if (match) {
+      let val = match[1].trim();
+      // Strip quotes if present
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      return val;
+    }
+    return defaultValue;
+  } catch (err) {
+    log('WARN', `Failed to read config (${key}):`, err);
+    return defaultValue;
+  }
+}
+
+/**
+ * Write a string setting to ~/.varie/config.yaml.
+ * Creates the file/directory if needed.
+ */
+function writeConfigString(key: string, value: string): void {
+  try {
+    const dir = path.dirname(CONFIG_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    if (fs.existsSync(CONFIG_PATH)) {
+      let content = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const regex = new RegExp(`^${key}:.*$`, 'm');
+      if (regex.test(content)) {
+        content = content.replace(regex, `${key}: ${value}`);
+      } else {
+        content = content.trimEnd() + `\n${key}: ${value}\n`;
+      }
+      fs.writeFileSync(CONFIG_PATH, content);
+    } else {
+      fs.writeFileSync(CONFIG_PATH, `${key}: ${value}\n`);
+    }
+    log('INFO', `Config: set ${key} = ${value}`);
+  } catch (err) {
+    log('ERROR', `Failed to write config (${key}):`, err);
+  }
+}
+
+// ============================================================================
+// Cloud Relay settings
+// ============================================================================
+
+export function getCloudRelayEnabled(): boolean {
+  return readConfigBool('cloudRelay');
+}
+
+export function setCloudRelayEnabled(enabled: boolean): void {
+  writeConfigBool('cloudRelay', enabled);
+}
+
+export function getCloudRelayToken(): string {
+  return readConfigString('cloudRelayToken', '');
+}
+
+export function setCloudRelayToken(token: string): void {
+  writeConfigString('cloudRelayToken', token);
+}
+
+// ============================================================================
+// Skip permissions
+// ============================================================================
+
+/**
  * Get the current skipPermissions setting value.
  */
 export function getSkipPermissions(): boolean {

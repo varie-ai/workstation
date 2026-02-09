@@ -5,7 +5,7 @@
  * Uses contextBridge for security.
  */
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // Types for the exposed API
 export type SessionType = 'orchestrator' | 'worker';
@@ -121,12 +121,32 @@ export interface WorkstationAPI {
     refinedTranscript?: string;
   }>;
 
+  // Cloud Relay
+  relayGetState: () => Promise<{
+    status: string;
+    connectionId: string | null;
+    machineId: string;
+    lastHeartbeat: string | null;
+    reconnectAttempts: number;
+    error: string | null;
+  }>;
+  relayGetEnabled: () => Promise<boolean>;
+  relaySetEnabled: (enabled: boolean) => Promise<boolean>;
+  relayGetToken: () => Promise<string>;
+  relaySetToken: (token: string) => Promise<string>;
+  onRelayStateChange: (callback: (state: unknown) => void) => void;
+  onRelayCommand: (callback: (data: { command: string; requestId: string; source: string }) => void) => void;
+  relayCommandResult: (result: { requestId: string; status: string; sessionId?: string; sessionRepo?: string; message: string; timestamp: string }) => void;
+
   // Config
   getSkipPermissions: () => Promise<boolean>;
   setSkipPermissions: (enabled: boolean) => Promise<boolean>;
 
   // Dialogs
   confirmDialog: (message: string, detail?: string) => Promise<boolean>;
+
+  // File utilities
+  getPathForFile: (file: File) => string;
 
   // App control
   quit: () => void;
@@ -240,6 +260,22 @@ contextBridge.exposeInMainWorld('workstation', {
   voiceRoute: (voiceInput: string, focusedSessionId?: string, audioPath?: string) =>
     ipcRenderer.invoke('voice:route', { voiceInput, focusedSessionId, audioPath }),
 
+  // Cloud Relay
+  relayGetState: () => ipcRenderer.invoke('relay:getState'),
+  relayGetEnabled: () => ipcRenderer.invoke('relay:getEnabled'),
+  relaySetEnabled: (enabled: boolean) => ipcRenderer.invoke('relay:setEnabled', enabled),
+  relayGetToken: () => ipcRenderer.invoke('relay:getToken'),
+  relaySetToken: (token: string) => ipcRenderer.invoke('relay:setToken', token),
+  onRelayStateChange: (callback: (state: unknown) => void) => {
+    ipcRenderer.on('relay:stateChanged', (_event, state: unknown) => callback(state));
+  },
+  onRelayCommand: (callback: (data: { command: string; requestId: string; source: string }) => void) => {
+    ipcRenderer.on('relay:command', (_event, data: { command: string; requestId: string; source: string }) => callback(data));
+  },
+  relayCommandResult: (result: { requestId: string; status: string; sessionId?: string; sessionRepo?: string; message: string; timestamp: string }) => {
+    ipcRenderer.send('relay:commandResult', result);
+  },
+
   // Config
   getSkipPermissions: () => ipcRenderer.invoke('config:getSkipPermissions'),
   setSkipPermissions: (enabled: boolean) => ipcRenderer.invoke('config:setSkipPermissions', enabled),
@@ -247,6 +283,9 @@ contextBridge.exposeInMainWorld('workstation', {
   // Dialogs
   confirmDialog: (message: string, detail?: string) =>
     ipcRenderer.invoke('dialog:confirm', { message, detail }),
+
+  // File utilities (Electron 32+ replacement for deprecated File.path)
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
 
   // App control
   quit: () => ipcRenderer.send('app:quit'),

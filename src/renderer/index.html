@@ -219,6 +219,35 @@
           <span id="connection-status" class="connection-status"></span>
         </div>
 
+        <!-- Cloud Relay / Mobile Access (hidden — not yet public) -->
+        <div id="relay-settings-section" class="hidden">
+          <div class="settings-divider"></div>
+          <h4 class="settings-section-title">Mobile Access</h4>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="relay-enabled">
+              <span>Enable Cloud Relay</span>
+            </label>
+            <span class="form-hint">Allow sending commands from your phone via the Cloud Relay</span>
+          </div>
+
+          <div id="relay-config-section">
+            <div class="form-group">
+              <label for="relay-token">Auth Token</label>
+              <input type="text" id="relay-token" placeholder="Your user ID or auth token">
+              <span class="form-hint">In dev mode, any string works as your user ID</span>
+            </div>
+
+            <div class="form-group">
+              <span class="relay-status-row">
+                <span id="relay-status-dot" class="status-dot disconnected"></span>
+                <span id="relay-status-text">Disconnected</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
         <div class="form-actions">
           <button type="button" id="cancel-voice-settings">Cancel</button>
           <button type="submit">Save</button>
