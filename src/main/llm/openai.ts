@@ -69,7 +69,8 @@ export class OpenAIProvider implements LLMProviderInterface {
       .map((s, i) => {
         const taskInfo = s.taskId ? ` (${s.taskId})` : '';
         const activity = s.lastActivity ? `: ${s.lastActivity}` : '';
-        return `${i + 1}. [${s.id}] ${s.repo}${taskInfo}${activity}`;
+        const context = s.workDescription ? `\n   Context: ${s.workDescription}` : '';
+        return `${i + 1}. [${s.id}] ${s.repo}${taskInfo}${activity}${context}`;
       })
       .join('\n');
 

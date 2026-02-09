@@ -35,11 +35,16 @@ export type SessionEventCallback = (
   session?: TerminalSession
 ) => void;
 
+// Max number of recent output lines to keep per session for routing context
+const RECENT_OUTPUT_MAX_LINES = 10;
+
 export class SessionManager {
   private sessions: Map<string, TerminalSession> = new Map();
   private onData: TerminalDataCallback;
   private onSessionEvent: SessionEventCallback;
   private bundledPluginPath: string | null = null;
+  // Ring buffer of recent terminal output lines per session (for voice routing context)
+  private recentOutput: Map<string, string[]> = new Map();
 
   constructor(onData: TerminalDataCallback, onSessionEvent: SessionEventCallback) {
     this.onData = onData;
@@ -134,8 +139,10 @@ export class SessionManager {
     };
 
     // Handle PTY data
+    this.recentOutput.set(sessionId, []);
     ptyProcess.onData((data) => {
       session.lastActive = new Date();
+      this.appendRecentOutput(sessionId, data);
       this.onData(sessionId, data);
     });
 
@@ -143,6 +150,7 @@ export class SessionManager {
     ptyProcess.onExit(({ exitCode, signal }) => {
       log('INFO', `Session ${sessionId} exited with code ${exitCode}, signal ${signal}`);
       this.sessions.delete(sessionId);
+      this.recentOutput.delete(sessionId);
       this.onSessionEvent('closed', sessionId);
     });
 
@@ -233,6 +241,58 @@ export class SessionManager {
    */
   getBuiltInSessions(): TerminalSession[] {
     return this.getAllSessions().filter((s) => !s.isExternal);
+  }
+
+  /**
+   * Get recent output lines for a session (for routing context).
+   * Returns cleaned, non-empty lines (ANSI stripped, max ~150 chars total).
+   */
+  getRecentOutput(sessionId: string, maxChars: number = 150): string | undefined {
+    const lines = this.recentOutput.get(sessionId);
+    if (!lines || lines.length === 0) return undefined;
+
+    // Take last lines, join, and truncate to maxChars
+    let result = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (result.length + line.length + 1 > maxChars) break;
+      result = result ? `${line} | ${result}` : line;
+    }
+    return result || undefined;
+  }
+
+  /**
+   * Append terminal data to the recent output ring buffer.
+   * Strips ANSI codes and keeps only meaningful text lines.
+   */
+  private appendRecentOutput(sessionId: string, data: string): void {
+    let lines = this.recentOutput.get(sessionId);
+    if (!lines) {
+      lines = [];
+      this.recentOutput.set(sessionId, lines);
+    }
+
+    // Strip ANSI escape codes (comprehensive: CSI with ?, OSC with BEL or ST, Fe sequences, control chars)
+    // eslint-disable-next-line no-control-regex
+    const clean = data
+      .replace(/\x1b\[[0-9;?]*[ -/]*[A-Za-z]/g, '')   // CSI sequences (includes \x1b[?25h etc.)
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences (BEL or ST terminated)
+      .replace(/\x1b[()][A-Z0-9]/g, '')                 // Character set selection
+      .replace(/\x1b[#%=><]/g, '')                       // Other Fe escape sequences
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); // Control chars (keep \t \n \r)
+
+    // Split into lines, filter empties and control chars
+    const newLines = clean
+      .split(/[\r\n]+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 3 && !/^[─━═╔╗╚╝│┃]+$/.test(l));  // Skip decorative lines
+
+    for (const line of newLines) {
+      lines.push(line.slice(0, 200));  // Cap individual line length
+      if (lines.length > RECENT_OUTPUT_MAX_LINES) {
+        lines.shift();
+      }
+    }
   }
 
   /**

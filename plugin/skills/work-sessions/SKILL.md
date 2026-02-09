@@ -37,11 +37,14 @@ Response:
       "repo": "webapp",
       "repoPath": "/path/to/repo",
       "taskId": "feature_name",
-      "lastActive": "2026-01-31T14:30:00Z"
+      "lastActive": "2026-01-31T14:30:00Z",
+      "workContext": "Implementing user auth API | Writing tests for login endpoint"
     }
   ]
 }
 ```
+
+The `workContext` field contains a brief snippet of recent session activity (from terminal output). Use it to give the user a sense of what each session is doing without switching to it.
 
 ### 2. Read projects index
 
@@ -64,10 +67,10 @@ cat <repo>/archive/<latest>/HANDOVER.md | head -30
 ```
 ## Active Sessions
 
-| ID | Repo | Task | Last Active |
-|----|------|------|-------------|
-| abc123 | webapp | user_auth | 5 min ago |
-| def456 | varie | auth_refactor | 30 min ago |
+| ID | Repo | Task | Last Active | Working On |
+|----|------|------|-------------|------------|
+| abc123 | webapp | user_auth | 5 min ago | Writing tests for login endpoint |
+| def456 | varie | auth_refactor | 30 min ago | Refactoring middleware chain |
 
 ## Projects Overview
 

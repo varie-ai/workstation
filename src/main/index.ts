@@ -530,6 +530,7 @@ function setupIpcHandlers(): void {
       taskId: s.taskId,
       status: 'active' as const, // TODO: track actual activity status
       lastActivity: s.taskId ? `Working on ${s.taskId}` : undefined,
+      workDescription: sessionManager?.getRecentOutput(s.id),
     }));
 
     // Find manager session ID

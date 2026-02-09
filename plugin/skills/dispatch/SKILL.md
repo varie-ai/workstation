@@ -78,6 +78,19 @@ Response:
   Message sent: "check the API status"
 ```
 
+## Creating New Sessions
+
+`/dispatch` only sends to **existing** sessions. If you need to create a new session, you have two options:
+
+1. **`/route`** — Auto-creates a first session on a repo if none exists
+2. **`create-worker`** — Explicitly creates a session (use for additional sessions on a repo that already has one)
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/workstation-dispatch create-worker <repo> <repo-path> <task-name>
+```
+
+Always provide a **task name** when creating additional sessions so they can be differentiated.
+
 ## Notes
 
 - The message is written to the session's terminal as if typed by a user

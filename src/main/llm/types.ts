@@ -113,6 +113,7 @@ export interface SessionSummary {
   taskId?: string;
   status: 'active' | 'idle';
   lastActivity?: string;
+  workDescription?: string;  // Brief summary of what this session is currently doing
 }
 
 export interface RoutingContext {

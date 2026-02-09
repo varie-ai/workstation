@@ -69,6 +69,7 @@ export interface WorkerInfo {
   type: 'orchestrator' | 'worker';
   isExternal: boolean;
   lastActive: string;
+  workContext?: string;  // Brief summary of recent session activity
 }
 
 export type EventCallback = (event: PluginEvent) => void;

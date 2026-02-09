@@ -448,6 +448,7 @@ export class Dispatcher {
       type: session.type,
       isExternal: session.isExternal,
       lastActive: session.lastActive.toISOString(),
+      workContext: this.sessionManager.getRecentOutput(session.id),
     };
   }
 
