@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { log } from './logger';
+import { getCloudRelayToken } from './config';
 import { SessionManager, TerminalSession } from './session-manager';
 
 // ============================================================================
@@ -55,13 +56,6 @@ export type RelayEventCallback = (state: RelayState) => void;
 export type RelayCommandCallback = (command: string, requestId: string, source: string) => void;
 
 // WebSocket message types (mirrors Go types.go)
-interface RegisterMsg {
-  type: 'register';
-  token: string;
-  machineId: string;
-  version: string;
-}
-
 interface HeartbeatMsg {
   type: 'heartbeat';
 }
@@ -75,6 +69,14 @@ interface CommandResultMsg {
   type: 'command_result';
   requestId: string;
   result: CommandResult;
+}
+
+interface StreamMsg {
+  type: 'stream';
+  sessionId: string;
+  event: string;        // "tool_use"
+  data: Record<string, unknown>;
+  timestamp: string;    // ISO 8601
 }
 
 interface SessionSummary {
@@ -191,7 +193,7 @@ export class RelayClient {
     this.currentToken = token;
     this.intentionalDisconnect = false;
 
-    const url = `${RELAY_URL}?token=${encodeURIComponent(token)}&machineId=${encodeURIComponent(this.state.machineId)}`;
+    const url = `${RELAY_URL}?token=${encodeURIComponent(token)}&machineId=${encodeURIComponent(this.state.machineId)}&version=${encodeURIComponent(WORKSTATION_VERSION)}`;
     log('INFO', `Relay connecting to ${RELAY_URL}...`);
 
     this.updateState({ status: 'connecting', error: null });
@@ -215,9 +217,10 @@ export class RelayClient {
 
     this.ws.onopen = () => {
       this.clearConnectionTimeout();
-      log('INFO', 'Relay WebSocket connected, sending register...');
+      log('INFO', 'Relay WebSocket connected, waiting for registration...');
       this.updateState({ status: 'connected' });
-      this.sendRegister(token);
+      // Registration handled by server at HTTP upgrade (from URL query params).
+      // Server sends 'registered' message back — handled in handleRegistered().
       this.startHeartbeat();
     };
 
@@ -315,27 +318,42 @@ export class RelayClient {
     this.send(msg);
   }
 
+  /**
+   * Send a tool activity event to the relay for streaming to mobile clients.
+   * Called when a PostToolUse hook event arrives from a session.
+   */
+  sendActivityEvent(sessionId: string, tool: string, target: string): void {
+    this.sendStreamEvent(sessionId, 'tool_use', { tool, target });
+  }
+
+  /**
+   * Send a generic stream event to the relay.
+   * Used for tool activity, turn lifecycle (stop, session_start, session_end), etc.
+   */
+  sendStreamEvent(sessionId: string, event: string, data: Record<string, unknown> = {}): void {
+    if (!this.ws || this.state.status !== 'registered') return;
+
+    const msg: StreamMsg = {
+      type: 'stream',
+      sessionId,
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    };
+    this.send(msg);
+  }
+
   // ==========================================================================
   // Private: WebSocket messaging
   // ==========================================================================
 
-  private send(msg: RegisterMsg | HeartbeatMsg | StatusMsg | CommandResultMsg): void {
+  private send(msg: HeartbeatMsg | StatusMsg | CommandResultMsg | StreamMsg): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     try {
       this.ws.send(JSON.stringify(msg));
     } catch (err) {
       log('ERROR', 'Relay send failed:', err);
     }
-  }
-
-  private sendRegister(token: string): void {
-    const msg: RegisterMsg = {
-      type: 'register',
-      token,
-      machineId: this.state.machineId,
-      version: WORKSTATION_VERSION,
-    };
-    this.send(msg);
   }
 
   private sendCommandResult(requestId: string, result: CommandResult): void {
@@ -456,7 +474,9 @@ export class RelayClient {
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connect(this.currentToken!);
+      // Re-read token from config in case it was refreshed (Firebase tokens expire in 1h)
+      const freshToken = getCloudRelayToken() || this.currentToken!;
+      this.connect(freshToken);
     }, delay);
   }
 

@@ -8,6 +8,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { app } from 'electron';
 import { log } from './logger';
 
 // Event types from plugin
@@ -25,6 +26,8 @@ export interface PluginEvent {
     | 'attention_needed'
     | 'question'
     | 'status_request'
+    // Tool activity events (PostToolUse hook → daemon → relay)
+    | 'tool_use'
     // Dispatch commands (orchestrator plugin → daemon → worker)
     | 'dispatch'        // Send to specific worker by ID
     | 'route'           // Auto-route via fuzzy match
@@ -78,20 +81,27 @@ export type DispatchHandler = (event: PluginEvent) => Promise<DispatchResponse>;
 // Dispatch command types that expect a response
 const DISPATCH_COMMANDS = ['dispatch', 'route', 'list_workers', 'create_worker', 'discover_projects'];
 
+const SOCKET_HEALTH_INTERVAL_MS = 10_000; // Check every 10s
+
 export class SocketServer {
   private server: net.Server | null = null;
   private socketPath: string;
   private onEvent: EventCallback;
   private onDispatch: DispatchHandler | null = null;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(onEvent: EventCallback) {
     this.onEvent = onEvent;
 
+    // Dev instances use a separate socket to avoid deleting production's socket (ISSUE-054)
+    const isDev = !app.isPackaged;
+    const suffix = isDev ? '-dev' : '';
+
     // Socket path - use /tmp on macOS/Linux, named pipe on Windows
     this.socketPath =
       process.platform === 'win32'
-        ? '\\\\.\\pipe\\varie-workstation'
-        : '/tmp/varie-workstation.sock';
+        ? `\\\\.\\pipe\\varie-workstation${suffix}`
+        : `/tmp/varie-workstation${suffix}.sock`;
   }
 
   start(): void {
@@ -137,9 +147,13 @@ export class SocketServer {
 
     // Write socket path to known location for plugin to find
     this.writeDaemonInfo();
+
+    // Self-healing: periodically check socket file still exists (ISSUE-053)
+    this.startHealthCheck();
   }
 
   stop(): void {
+    this.stopHealthCheck();
     this.server?.close();
     if (process.platform !== 'win32' && fs.existsSync(this.socketPath)) {
       fs.unlinkSync(this.socketPath);
@@ -151,6 +165,71 @@ export class SocketServer {
     if (fs.existsSync(infoPath)) {
       fs.unlinkSync(infoPath);
     }
+  }
+
+  // ==========================================================================
+  // Socket health check (ISSUE-053)
+  // ==========================================================================
+
+  private startHealthCheck(): void {
+    this.stopHealthCheck();
+    this.healthTimer = setInterval(() => {
+      if (process.platform === 'win32') return;
+      if (!fs.existsSync(this.socketPath)) {
+        log('WARN', 'Socket file missing, recreating...');
+        this.rebind();
+      }
+    }, SOCKET_HEALTH_INTERVAL_MS);
+  }
+
+  private stopHealthCheck(): void {
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
+  }
+
+  /**
+   * Rebind the socket server after the socket file was deleted.
+   * Closes the old server and creates a new one on the same path.
+   */
+  private rebind(): void {
+    // Close existing server (it's broken — socket file is gone)
+    this.server?.close();
+
+    // Recreate server with the same connection handler
+    this.server = net.createServer((socket) => {
+      let buffer = '';
+
+      socket.on('data', (data) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.trim()) {
+            this.handleMessage(line.trim(), socket);
+          }
+        }
+      });
+
+      socket.on('error', (err) => {
+        log('WARN', 'Socket client error:', err.message);
+      });
+    });
+
+    this.server.listen(this.socketPath, () => {
+      log('INFO', `Socket server rebound on ${this.socketPath}`);
+      if (process.platform !== 'win32') {
+        fs.chmodSync(this.socketPath, 0o600);
+      }
+    });
+
+    this.server.on('error', (err) => {
+      log('ERROR', 'Socket rebind error:', err);
+    });
+
+    // Update daemon.json
+    this.writeDaemonInfo();
   }
 
   private handleMessage(message: string, socket: net.Socket): void {

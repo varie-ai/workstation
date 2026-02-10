@@ -2588,9 +2588,67 @@ async function handleVoiceCommand(transcript: string, audioPath?: string): Promi
 }
 
 /**
+ * Handle a structured response from mobile (question answer, approval, plan confirm).
+ * Bypasses voice routing — writes directly to the target session's PTY.
+ *
+ * Formats:
+ *   __question_response:<sessionId>:<optionIndex>   → writes "<optionIndex>\r"
+ *   __approval_response:<sessionId>:<y|n>           → writes "y\r" or "n\r"
+ *   __plan_response:<sessionId>:<y|n>               → writes "y\r" or "n\r"
+ *
+ * Returns true if the command was a structured response (handled), false otherwise.
+ */
+function handleStructuredResponse(command: string, requestId: string): boolean {
+  const match = command.match(/^__(question_response|approval_response|plan_response):([^:]+):(.+)$/);
+  if (!match) return false;
+
+  const [, responseType, sessionId, value] = match;
+  window.log.info(`Structured response: type=${responseType}, session=${sessionId}, value=${value}`);
+
+  // Validate session exists
+  const worker = workers.get(sessionId);
+  const isOrchestrator = orchestratorState?.session.id === sessionId;
+  if (!worker && !isOrchestrator) {
+    window.log.warn(`Structured response: session ${sessionId} not found`);
+    window.workstation.relayCommandResult({
+      requestId,
+      status: 'error',
+      message: `Session ${sessionId} not found`,
+      timestamp: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  // Write the response directly to the PTY (no routing, no confirmBeforeSend)
+  // Write value first, then Enter after 150ms — Claude Code's input handler
+  // needs the gap to process keystrokes (same as sendCommandToSession, ISSUE-030)
+  window.workstation.writeToTerminal(sessionId, value);
+  setTimeout(() => {
+    window.workstation.writeToTerminal(sessionId, '\r');
+  }, 150);
+
+  const sessionRepo = worker?.session.repo || 'manager';
+  window.log.info(`Structured response sent to ${sessionRepo}: "${value}"`);
+
+  window.workstation.relayCommandResult({
+    requestId,
+    status: 'routed',
+    sessionId,
+    sessionRepo,
+    message: `${responseType}: sent "${value}" to ${sessionRepo}`,
+    timestamp: new Date().toISOString(),
+  });
+
+  return true;
+}
+
+/**
  * Handle a command from the Cloud Relay (mobile).
- * Uses the same routing pipeline as local voice — respects voiceRoutingMode,
- * confirmBeforeSend, and LLM routing. No voice bar UI changes.
+ *
+ * Two paths:
+ * 1. Structured responses (__question_response, __approval_response, __plan_response)
+ *    → bypass routing, write directly to specific session PTY
+ * 2. Free-form commands → route through voice pipeline (routing mode, LLM, etc.)
  */
 async function handleRelayCommand(command: string, requestId: string, source: string): Promise<void> {
   window.log.info(`Relay command: "${command.substring(0, 80)}", requestId=${requestId}, source=${source}`);
@@ -2605,6 +2663,12 @@ async function handleRelayCommand(command: string, requestId: string, source: st
     return;
   }
 
+  // Check for structured responses first (no routing needed)
+  if (handleStructuredResponse(command, requestId)) {
+    return;
+  }
+
+  // Free-form command — route through voice pipeline
   try {
     const result = await routeCommand(command);
     const { targetSessionId, targetName } = result;
@@ -2799,7 +2863,10 @@ function setupIPCHandlers(): void {
 
   // Session created
   window.workstation.onSessionCreated((session) => {
-    window.log.info('Session created:', session.id, session.type);
+    window.log.info('Session created:', session.id, session.type, session.isExternal ? '(external)' : '');
+
+    // Skip external sessions — they're tracked for dispatch/routing, not UI
+    if (session.isExternal) return;
 
     // Add type to session if missing (backward compat)
     if (!session.type) {

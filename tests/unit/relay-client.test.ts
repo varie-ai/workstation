@@ -136,16 +136,16 @@ describe('RelayClient', () => {
     expect(stateChanges.some((s) => s.status === 'connecting')).toBe(true);
   });
 
-  it('sends register message on open', () => {
+  it('does not send register message (server handles via URL params)', () => {
     client.connect('test-token');
     mockWsInstance!.simulateOpen();
 
-    expect(mockWsInstance!.sentMessages.length).toBeGreaterThanOrEqual(1);
-    const registerMsg = JSON.parse(mockWsInstance!.sentMessages[0]);
-    expect(registerMsg.type).toBe('register');
-    expect(registerMsg.token).toBe('test-token');
-    expect(registerMsg.machineId).toBeTruthy();
-    expect(registerMsg.version).toBeTruthy();
+    // No register message should be sent — registration happens at HTTP upgrade
+    const registerMsgs = mockWsInstance!.sentMessages.filter((m) => {
+      const parsed = JSON.parse(m);
+      return parsed.type === 'register';
+    });
+    expect(registerMsgs).toHaveLength(0);
   });
 
   it('transitions to registered on registered message', () => {
@@ -254,6 +254,41 @@ describe('RelayClient', () => {
     // Should NOT schedule reconnect
     vi.advanceTimersByTime(120_000);
     expect(client.getState().reconnectAttempts).toBe(0);
+  });
+
+  it('sends stream message via sendActivityEvent()', () => {
+    client.connect('test-token');
+    mockWsInstance!.simulateOpen();
+    mockWsInstance!.simulateMessage({ type: 'registered', connectionId: 'conn-123' });
+
+    // Clear sent messages (register + status broadcast)
+    mockWsInstance!.sentMessages = [];
+
+    client.sendActivityEvent('session-42', 'Edit', 'src/main/index.ts');
+
+    expect(mockWsInstance!.sentMessages).toHaveLength(1);
+    const msg = JSON.parse(mockWsInstance!.sentMessages[0]);
+    expect(msg.type).toBe('stream');
+    expect(msg.sessionId).toBe('session-42');
+    expect(msg.event).toBe('tool_use');
+    expect(msg.data).toEqual({ tool: 'Edit', target: 'src/main/index.ts' });
+    expect(msg.timestamp).toBeTruthy();
+  });
+
+  it('does not send activity event when not registered', () => {
+    client.connect('test-token');
+    mockWsInstance!.simulateOpen();
+    // NOT registered yet — only "connected"
+
+    mockWsInstance!.sentMessages = [];
+    client.sendActivityEvent('session-42', 'Read', 'README.md');
+
+    // No stream message should be sent (register msg was already sent before we cleared)
+    const streamMsgs = mockWsInstance!.sentMessages.filter((m) => {
+      const parsed = JSON.parse(m);
+      return parsed.type === 'stream';
+    });
+    expect(streamMsgs).toHaveLength(0);
   });
 
   it('broadcasts session status on registration', () => {

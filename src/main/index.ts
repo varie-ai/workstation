@@ -325,10 +325,21 @@ function handlePluginEvent(event: PluginEvent): void {
           event.context.taskId
         );
       }
+      // Forward to relay for mobile monitoring
+      if (relayClient?.isConnected()) {
+        relayClient.sendStreamEvent(event.sessionId, 'session_start', {
+          project: event.context?.project || '',
+          projectPath: event.context?.projectPath || '',
+        });
+      }
       break;
 
     case 'session_end':
       sessionManager?.removeExternalSession(event.sessionId);
+      // Forward to relay for mobile monitoring
+      if (relayClient?.isConnected()) {
+        relayClient.sendStreamEvent(event.sessionId, 'session_end');
+      }
       break;
 
     case 'checkpoint':
@@ -340,11 +351,71 @@ function handlePluginEvent(event: PluginEvent): void {
       }
       break;
 
+    case 'tool_use':
+      // Forward tool activity to Cloud Relay for mobile streaming
+      log('INFO', `Tool event: ${event.payload?.tool} → ${event.payload?.target} (relay=${relayClient?.isConnected() ? 'yes' : 'no'})`);
+      if (relayClient?.isConnected() && event.payload) {
+        const tool = (event.payload.tool as string) || '';
+        const target = (event.payload.target as string) || '';
+
+        // Event routing for mobile:
+        //
+        // PreToolUse (needsApproval=true): fires BEFORE execution for permission-required tools.
+        //   - Bash/Write/Edit → 'approval_needed' (mobile can approve/reject)
+        //   - AskUserQuestion → 'question' (if PreToolUse fires — may not for auto-approved)
+        //
+        // PostToolUse (no needsApproval): fires AFTER execution.
+        //   - ExitPlanMode → 'plan_approval' (plan written, CLI approval prompt comes NEXT — good timing)
+        //   - AskUserQuestion → regular tool_use (question already answered — too late)
+        //   - Everything else → regular tool_use
+        //
+        // Note: PreToolUse only fires for permission-required tools. Auto-approved tools
+        // (Glob, Read, AskUserQuestion) skip PreToolUse entirely. ExitPlanMode is likely
+        // auto-approved too, so we detect it from PostToolUse where timing still works.
+
+        if (event.payload.needsApproval) {
+          // === PreToolUse path ===
+          if (tool === 'AskUserQuestion' && event.payload.toolInput) {
+            relayClient.sendStreamEvent(event.sessionId, 'question', {
+              tool,
+              toolInput: event.payload.toolInput,
+            });
+          } else {
+            // Generic tool approval (Bash, Write, Edit, etc.)
+            relayClient.sendStreamEvent(event.sessionId, 'approval_needed', {
+              tool,
+              target,
+            });
+          }
+        } else if (tool === 'ExitPlanMode') {
+          // === PostToolUse for ExitPlanMode ===
+          // Plan is written, tool completed, CLI approval prompt shows NEXT.
+          // Perfect timing — mobile can send y/n before local user reacts.
+          relayClient.sendStreamEvent(event.sessionId, 'plan_approval', {
+            tool,
+            toolInput: event.payload.toolInput || {},
+          });
+        } else {
+          // === PostToolUse for everything else ===
+          relayClient.sendActivityEvent(event.sessionId, tool, target);
+        }
+      }
+      break;
+
+    case 'stop':
+      // Claude finished a turn — forward to relay so mobile knows it's waiting for input
+      if (relayClient?.isConnected()) {
+        relayClient.sendStreamEvent(event.sessionId, 'stop', {
+          project: event.context?.project || '',
+        });
+      }
+      mainWindow?.webContents.send('plugin:event', event);
+      break;
+
     case 'attention_needed':
     case 'question':
       // Forward to renderer for UI notification
       mainWindow?.webContents.send('plugin:event', event);
-      // Could also trigger system notification
       break;
 
     default:
