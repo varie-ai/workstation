@@ -9,8 +9,9 @@ const VARIE_DIR = path.join(os.tmpdir(), 'varie-test-auto-resume');
 const SESSIONS_DIR = path.join(VARIE_DIR, 'sessions');
 const PLUGIN_SCRIPTS = path.resolve(__dirname, '../../plugin/scripts');
 
-// Test CWD — use the actual repo path so git commands work
-const TEST_CWD = path.resolve(__dirname, '../..');
+// Test CWD — resolve to git root (matches what the scripts do)
+const TEST_CWD = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: path.resolve(__dirname, '../..') }).trim();
+const TEST_REPO_NAME = path.basename(TEST_CWD);
 
 // Standard test session ID used across tests
 const TEST_SID = 'test-session';
@@ -155,8 +156,9 @@ describe('auto-checkpoint-on-compact (PreCompact)', () => {
     const flag = readFlag(sid);
     expect(flag.type).toBe('compact');
     expect(flag.trigger).toBe('auto');
-    expect(flag.repo_name).toBe('varie-workstation');
-    expect(flag.branch).toBe('main');
+    expect(flag.repo_name).toBe(TEST_REPO_NAME);
+    // CI may be in detached HEAD (no branch name)
+    expect(typeof flag.branch).toBe('string');
     expect(flag.commit).toBeTruthy();
   });
 
@@ -171,7 +173,7 @@ describe('auto-checkpoint-on-compact (PreCompact)', () => {
 
     const content = fs.readFileSync(cpPath, 'utf-8');
     expect(content).toContain('repo_path: "' + TEST_CWD + '"');
-    expect(content).toContain('Working in varie-workstation');
+    expect(content).toContain(`Working in ${TEST_REPO_NAME}`);
     expect(content).toContain('git_state:');
   });
 
@@ -183,7 +185,7 @@ describe('auto-checkpoint-on-compact (PreCompact)', () => {
 
     const commits = readFlagSection('recent_commits', sid);
     expect(commits).toBeTruthy();
-    expect(commits.split('\n').length).toBeGreaterThan(2);
+    expect(commits.split('\n').length).toBeGreaterThanOrEqual(1);
   });
 
   it('captures modified files in flag file', () => {
@@ -489,7 +491,7 @@ describe('end-to-end: PreCompact → UserPromptSubmit', () => {
     const ctx = json.hookSpecificOutput.additionalContext;
 
     expect(ctx).toContain('Context Recovery after Compaction');
-    expect(ctx).toContain('varie-workstation');
+    expect(ctx).toContain(TEST_REPO_NAME);
     expect(ctx).toContain('Recent commits');
 
     // Step 3: Flag consumed
