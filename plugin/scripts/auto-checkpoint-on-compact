@@ -1,0 +1,179 @@
+#!/bin/bash
+# auto-checkpoint-on-compact - Auto-checkpoint + handover before context compaction
+#
+# PreCompact hook: fires before Claude Code compresses context.
+#
+# If an existing checkpoint exists: refreshes last_active + git_state.
+# If NO checkpoint exists: creates a minimal one from git state.
+# Always: captures recent git log + modified files into the flag file
+# so that post-compaction resume has rich context even without manual /work-checkpoint.
+#
+# Input (stdin): JSON with session_id, cwd, trigger
+# Output: none (side effects only — PreCompact is read-only)
+
+set -e
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Extract fields
+CWD=$(echo "$INPUT" | grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+TRIGGER=$(echo "$INPUT" | grep -o '"trigger"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"trigger"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+
+# Need at least CWD
+[[ -z "$CWD" ]] && exit 0
+
+VARIE_DIR="${VARIE_DIR:-$HOME/.varie}"
+SESSIONS_DIR="$VARIE_DIR/sessions"
+FLAG_DIR="$VARIE_DIR"
+# Per-session flag file prevents race conditions between concurrent sessions
+FLAG_FILE="$FLAG_DIR/resume-pending-${SESSION_ID:-unknown}"
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+mkdir -p "$SESSIONS_DIR"
+
+# =========================================================================
+# Gather git state (always, regardless of existing checkpoint)
+# =========================================================================
+
+GIT_BRANCH=""
+GIT_COMMIT=""
+GIT_DIRTY=""
+GIT_RECENT_LOG=""
+IS_GIT=false
+
+if [[ -d "$CWD/.git" ]] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  IS_GIT=true
+  # Resolve to git repo root (CWD may be a subdirectory)
+  GIT_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$GIT_ROOT" ]] && CWD="$GIT_ROOT"
+  GIT_BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null || true)
+  GIT_COMMIT=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null || true)
+  # Modified/staged files (compact format)
+  GIT_DIRTY=$(git -C "$CWD" status --porcelain 2>/dev/null | head -20 || true)
+  # Recent commits (last 10, one-line format)
+  GIT_RECENT_LOG=$(git -C "$CWD" log --oneline -10 2>/dev/null || true)
+fi
+
+REPO_NAME=$(basename "$CWD")
+
+# =========================================================================
+# Find or create checkpoint
+# =========================================================================
+
+CHECKPOINT_FILE=""
+CHECKPOINT_TASK=""
+CHECKPOINT_STEP=""
+CHECKPOINT_ARCHIVE=""
+
+if [[ -d "$SESSIONS_DIR" ]]; then
+  for f in "$SESSIONS_DIR"/*.yaml; do
+    [[ -f "$f" ]] || continue
+    REPO_PATH=$(grep "^repo_path:" "$f" 2>/dev/null | sed 's/^repo_path:[[:space:]]*//' | tr -d '"' || true)
+    if [[ "$REPO_PATH" == "$CWD" ]]; then
+      CHECKPOINT_FILE="$f"
+      CHECKPOINT_TASK=$(awk '/^task:/{found=1; next} found && /^  name:/{sub(/^  name:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" 2>/dev/null || true)
+      CHECKPOINT_STEP=$(grep "^current_step:" "$f" 2>/dev/null | sed 's/^current_step:[[:space:]]*//' | tr -d '"' || true)
+      CHECKPOINT_ARCHIVE=$(awk '/^task:/{found=1; next} found && /^  archive_path:/{sub(/^  archive_path:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$f" 2>/dev/null || true)
+      break
+    fi
+  done
+fi
+
+if [[ -n "$CHECKPOINT_FILE" ]]; then
+  # ---- Existing checkpoint: refresh last_active + git_state ----
+  if grep -q "^last_active:" "$CHECKPOINT_FILE" 2>/dev/null; then
+    sed -i '' "s/^last_active:.*/last_active: \"$TIMESTAMP\"/" "$CHECKPOINT_FILE" 2>/dev/null || true
+  fi
+  # Update git_state block if it exists
+  if $IS_GIT && grep -q "^git_state:" "$CHECKPOINT_FILE" 2>/dev/null; then
+    sed -i '' "s/^  branch:.*/  branch: \"$GIT_BRANCH\"/" "$CHECKPOINT_FILE" 2>/dev/null || true
+    sed -i '' "s/^  last_commit:.*/  last_commit: \"$GIT_COMMIT\"/" "$CHECKPOINT_FILE" 2>/dev/null || true
+  fi
+else
+  # ---- No checkpoint: create a minimal one ----
+  # Use session_id from hook, or generate one from timestamp
+  CP_ID="${SESSION_ID:-auto-$(date +%s)}"
+  CHECKPOINT_FILE="$SESSIONS_DIR/${CP_ID}.yaml"
+  CHECKPOINT_TASK="Working in $REPO_NAME"
+  CHECKPOINT_STEP="active"
+
+  cat > "$CHECKPOINT_FILE" << YAML
+session_id: "$CP_ID"
+created_at: "$TIMESTAMP"
+last_active: "$TIMESTAMP"
+repo: "$REPO_NAME"
+repo_path: "$CWD"
+working_dir: "$CWD"
+task:
+  id: "auto-compact-$REPO_NAME"
+  name: "Working in $REPO_NAME"
+  archive_path: ""
+current_step: "active"
+steps:
+  - id: "active"
+    name: "Active work (auto-captured at compaction)"
+    status: "in_progress"
+    notes: "Checkpoint auto-created by PreCompact hook"
+YAML
+
+  # Add git_state if in a git repo
+  if $IS_GIT; then
+    cat >> "$CHECKPOINT_FILE" << YAML
+git_state:
+  branch: "$GIT_BRANCH"
+  last_commit: "$GIT_COMMIT"
+YAML
+    # Add dirty files
+    if [[ -n "$GIT_DIRTY" ]]; then
+      echo "  dirty_files:" >> "$CHECKPOINT_FILE"
+      echo "$GIT_DIRTY" | while IFS= read -r line; do
+        STATUS=$(echo "$line" | cut -c1-2 | tr -d ' ')
+        FILEPATH=$(echo "$line" | cut -c4-)
+        echo "    - path: \"$FILEPATH\"" >> "$CHECKPOINT_FILE"
+        echo "      status: \"$STATUS\"" >> "$CHECKPOINT_FILE"
+      done
+    fi
+  fi
+fi
+
+# =========================================================================
+# Write resume-pending flag (with rich git context for post-compaction)
+# =========================================================================
+
+cat > "$FLAG_FILE" << EOF
+type=compact
+trigger=$TRIGGER
+checkpoint=$CHECKPOINT_FILE
+task=$CHECKPOINT_TASK
+current_step=$CHECKPOINT_STEP
+archive_path=$CHECKPOINT_ARCHIVE
+repo_path=$CWD
+repo_name=$REPO_NAME
+branch=$GIT_BRANCH
+commit=$GIT_COMMIT
+session_id=$SESSION_ID
+timestamp=$TIMESTAMP
+EOF
+
+# Append git context as multiline sections (delimited for parsing)
+if [[ -n "$GIT_DIRTY" ]]; then
+  echo "---dirty_files---" >> "$FLAG_FILE"
+  echo "$GIT_DIRTY" >> "$FLAG_FILE"
+  echo "---end---" >> "$FLAG_FILE"
+fi
+
+if [[ -n "$GIT_RECENT_LOG" ]]; then
+  echo "---recent_commits---" >> "$FLAG_FILE"
+  echo "$GIT_RECENT_LOG" >> "$FLAG_FILE"
+  echo "---end---" >> "$FLAG_FILE"
+fi
+
+# Notify workstation daemon (best effort)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -x "$SCRIPT_DIR/workstation-notify" ]]; then
+  "$SCRIPT_DIR/workstation-notify" compact --message "PreCompact: checkpoint saved" 2>/dev/null || true
+fi
+
+exit 0

@@ -1,6 +1,6 @@
 {
   "name": "varie-workstation",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Unified development environment for managing multiple Claude Code sessions",
   "main": "dist/main/index.js",
   "author": {

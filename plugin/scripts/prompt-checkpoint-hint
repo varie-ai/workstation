@@ -1,17 +1,159 @@
 #!/bin/bash
-# prompt-checkpoint-hint - Detect completion phrases and suggest checkpoints
+# prompt-checkpoint-hint - Auto-resume context injection + completion phrase hints
 #
 # This script runs on every UserPromptSubmit via hook.
-# It detects phrases indicating work completion and gently suggests
-# saving progress with /work-checkpoint or /work-handover.
+#
+# Priority 1: Check for ~/.varie/resume-pending flag (from PreCompact or SessionStart).
+#   If found, inject resume context via additionalContext and delete the flag.
+#   This is the primary mechanism for post-compaction and post-restart recovery.
+#
+# Priority 2: Detect phrases indicating work completion and suggest checkpoints.
 #
 # Input (stdin): JSON with prompt field
-# Output (stdout): JSON with additionalContext suggestion (or nothing)
+# Output (stdout): JSON with additionalContext (or nothing)
 
 set -e
 
 # Read JSON from stdin
 INPUT=$(cat)
+
+VARIE_DIR="${VARIE_DIR:-$HOME/.varie}"
+
+# Extract session_id and cwd from hook input
+HOOK_SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+HOOK_CWD=$(echo "$INPUT" | grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+
+# Per-session flag file (matches what PreCompact/SessionStart wrote)
+FLAG_FILE="$VARIE_DIR/resume-pending-${HOOK_SESSION_ID:-unknown}"
+
+# =========================================================================
+# Priority 1: Resume context injection
+# =========================================================================
+
+if [[ -f "$FLAG_FILE" ]]; then
+  # Read flag file fields
+  FLAG_TYPE=$(grep "^type=" "$FLAG_FILE" 2>/dev/null | sed 's/^type=//' || true)
+  FLAG_MODE=$(grep "^mode=" "$FLAG_FILE" 2>/dev/null | sed 's/^mode=//' || true)
+  FLAG_TASK=$(grep "^task=" "$FLAG_FILE" 2>/dev/null | sed 's/^task=//' || true)
+  FLAG_STEP=$(grep "^current_step=" "$FLAG_FILE" 2>/dev/null | sed 's/^current_step=//' || true)
+  FLAG_CHECKPOINT=$(grep "^checkpoint=" "$FLAG_FILE" 2>/dev/null | sed 's/^checkpoint=//' || true)
+  FLAG_ARCHIVE=$(grep "^archive_path=" "$FLAG_FILE" 2>/dev/null | sed 's/^archive_path=//' || true)
+  FLAG_REPO_PATH=$(grep "^repo_path=" "$FLAG_FILE" 2>/dev/null | sed 's/^repo_path=//' || true)
+  FLAG_REPO_NAME=$(grep "^repo_name=" "$FLAG_FILE" 2>/dev/null | sed 's/^repo_name=//' || true)
+  FLAG_BRANCH=$(grep "^branch=" "$FLAG_FILE" 2>/dev/null | sed 's/^branch=//' || true)
+  FLAG_COMMIT=$(grep "^commit=" "$FLAG_FILE" 2>/dev/null | sed 's/^commit=//' || true)
+  FLAG_TIME_AGO=$(grep "^time_ago=" "$FLAG_FILE" 2>/dev/null | sed 's/^time_ago=//' || true)
+
+  # Read multiline sections (git context embedded by PreCompact)
+  FLAG_DIRTY=$(sed -n '/^---dirty_files---$/,/^---end---$/{ /^---/d; p; }' "$FLAG_FILE" 2>/dev/null || true)
+  FLAG_COMMITS=$(sed -n '/^---recent_commits---$/,/^---end---$/{ /^---/d; p; }' "$FLAG_FILE" 2>/dev/null || true)
+
+  # Guard: skip if flag's repo doesn't match current CWD (stale/wrong session)
+  if [[ -n "$HOOK_CWD" && -n "$FLAG_REPO_PATH" && "$HOOK_CWD" != "$FLAG_REPO_PATH" ]]; then
+    # Wrong repo — delete stale flag and skip
+    rm -f "$FLAG_FILE"
+    # Fall through to phrase detection below
+  else
+
+  # Delete flag immediately to prevent re-injection
+  rm -f "$FLAG_FILE"
+
+  # Build resume context based on type and mode
+  CONTEXT=""
+
+  if [[ "$FLAG_TYPE" == "compact" ]]; then
+    # ---- COMPACTION RECOVERY ----
+    CONTEXT="[Varie Workstation - Context Recovery after Compaction]\\n"
+    CONTEXT+="You just experienced context compaction. Your prior work state:\\n"
+    [[ -n "$FLAG_TASK" ]] && CONTEXT+="- Task: ${FLAG_TASK}\\n"
+    [[ -n "$FLAG_STEP" ]] && CONTEXT+="- Current Step: ${FLAG_STEP}\\n"
+    if [[ -n "$FLAG_BRANCH" && -n "$FLAG_COMMIT" ]]; then
+      CONTEXT+="- Git: ${FLAG_BRANCH} (${FLAG_COMMIT})\\n"
+    elif [[ -n "$FLAG_BRANCH" ]]; then
+      CONTEXT+="- Git: ${FLAG_BRANCH}\\n"
+    fi
+    [[ -n "$FLAG_CHECKPOINT" ]] && CONTEXT+="- Checkpoint: ${FLAG_CHECKPOINT}\\n"
+    if [[ -n "$FLAG_ARCHIVE" && -n "$FLAG_REPO_PATH" ]]; then
+      HANDOVER_PATH="${FLAG_REPO_PATH}/${FLAG_ARCHIVE}HANDOVER.md"
+      [[ -f "$HANDOVER_PATH" ]] && CONTEXT+="- Handover: ${HANDOVER_PATH}\\n"
+    fi
+    # Include recent commits for context recovery
+    if [[ -n "$FLAG_COMMITS" ]]; then
+      CONTEXT+="\\nRecent commits:\\n"
+      while IFS= read -r line; do
+        CONTEXT+="  ${line}\\n"
+      done <<< "$FLAG_COMMITS"
+    fi
+    # Include modified files
+    if [[ -n "$FLAG_DIRTY" ]]; then
+      CONTEXT+="\\nModified files:\\n"
+      while IFS= read -r line; do
+        CONTEXT+="  ${line}\\n"
+      done <<< "$FLAG_DIRTY"
+    fi
+    if [[ -n "$FLAG_CHECKPOINT" ]]; then
+      CONTEXT+="\\nRead the checkpoint file to recover full context (steps, notes, files touched), then continue your work."
+    else
+      CONTEXT+="\\nReview the git state above and continue your work."
+    fi
+
+  elif [[ "$FLAG_TYPE" == "restart" ]]; then
+    # ---- SESSION RESTART RECOVERY ----
+    case "$FLAG_MODE" in
+      auto-resume)
+        CONTEXT="[Varie Workstation - Auto-Resume]\\n"
+        CONTEXT+="Prior work detected (last active ${FLAG_TIME_AGO}):\\n"
+        CONTEXT+="- Task: ${FLAG_TASK}\\n"
+        CONTEXT+="- Current Step: ${FLAG_STEP}\\n"
+        if [[ -n "$FLAG_BRANCH" && -n "$FLAG_COMMIT" ]]; then
+          CONTEXT+="- Git: ${FLAG_BRANCH} (${FLAG_COMMIT})\\n"
+        elif [[ -n "$FLAG_BRANCH" ]]; then
+          CONTEXT+="- Git: ${FLAG_BRANCH}\\n"
+        fi
+        CONTEXT+="- Checkpoint: ${FLAG_CHECKPOINT}\\n"
+        if [[ -n "$FLAG_ARCHIVE" && -n "$FLAG_REPO_PATH" ]]; then
+          HANDOVER_PATH="${FLAG_REPO_PATH}/${FLAG_ARCHIVE}HANDOVER.md"
+          [[ -f "$HANDOVER_PATH" ]] && CONTEXT+="- Handover: ${HANDOVER_PATH}\\n"
+        fi
+        CONTEXT+="\\nRead the checkpoint and handover to resume. Continue without asking for confirmation — this is a recent session."
+        ;;
+      prompted)
+        CONTEXT="[Varie Workstation - Prior Work Found]\\n"
+        CONTEXT+="Found prior work on '${FLAG_TASK}' (last active ${FLAG_TIME_AGO}).\\n"
+        CONTEXT+="Checkpoint: ${FLAG_CHECKPOINT}\\n"
+        if [[ -n "$FLAG_ARCHIVE" && -n "$FLAG_REPO_PATH" ]]; then
+          HANDOVER_PATH="${FLAG_REPO_PATH}/${FLAG_ARCHIVE}HANDOVER.md"
+          [[ -f "$HANDOVER_PATH" ]] && CONTEXT+="Handover: ${HANDOVER_PATH}\\n"
+        fi
+        CONTEXT+="\\nAsk the user: 'I found prior work on ${FLAG_TASK} from ${FLAG_TIME_AGO}. Would you like to resume, or start fresh?'"
+        ;;
+      hint)
+        CONTEXT="[Varie Workstation] Old work exists in this repo (task: ${FLAG_TASK}, last active ${FLAG_TIME_AGO}). Use /work-resume to pick up where you left off."
+        ;;
+    esac
+  fi
+
+  # Output if we built context
+  if [[ -n "$CONTEXT" ]]; then
+    # Escape special chars for JSON
+    CONTEXT_ESCAPED=$(echo "$CONTEXT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g')
+    cat << EOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "UserPromptSubmit",
+    "additionalContext": "$CONTEXT_ESCAPED"
+  }
+}
+EOF
+    exit 0
+  fi
+
+  fi  # close CWD guard else
+fi
+
+# =========================================================================
+# Priority 2: Completion phrase detection (original behavior)
+# =========================================================================
 
 # Extract prompt field
 PROMPT=$(echo "$INPUT" | grep -o '"prompt"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"prompt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)

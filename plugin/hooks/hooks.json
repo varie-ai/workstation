@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/auto-checkpoint-on-compact",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -17,6 +28,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-statusline",
             "timeout": 2000
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/auto-resume-check",
+            "timeout": 5000
           }
         ]
       }

@@ -1,0 +1,154 @@
+#!/bin/bash
+# auto-resume-check - Detect prior work on SessionStart for auto-resume
+#
+# SessionStart hook: fires when a new session starts.
+# Scans checkpoints for matching repo, checks time gap,
+# writes ~/.varie/resume-pending flag with appropriate mode.
+#
+# Modes:
+#   auto-resume  — gap < 2 hours, continue without asking
+#   prompted     — gap 2-24 hours, ask user to confirm
+#   hint         — gap > 24 hours, soft mention only
+#
+# Input (stdin): JSON with session_id, cwd
+# Output: none (side effects only — writes flag file)
+
+set -e
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Extract fields
+CWD=$(echo "$INPUT" | grep -o '"cwd"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+SESSION_ID=$(echo "$INPUT" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' 2>/dev/null || true)
+
+# Need at least CWD
+[[ -z "$CWD" ]] && exit 0
+
+# Resolve to git repo root (CWD may be a subdirectory)
+if git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  GIT_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$GIT_ROOT" ]] && CWD="$GIT_ROOT"
+fi
+
+VARIE_DIR="${VARIE_DIR:-$HOME/.varie}"
+SESSIONS_DIR="$VARIE_DIR/sessions"
+CONFIG_FILE="$VARIE_DIR/config.yaml"
+FLAG_DIR="$VARIE_DIR"
+# Per-session flag file prevents race conditions between concurrent sessions
+FLAG_FILE="$FLAG_DIR/resume-pending-${SESSION_ID:-unknown}"
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+NOW_EPOCH=$(date +%s)
+
+# Read config thresholds (defaults: auto < 120 min, prompted < 24 hours)
+AUTO_THRESHOLD_MIN=120
+PROMPT_THRESHOLD_HOURS=24
+AUTO_RESUME_ENABLED="true"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # Check master toggle
+  ENABLED=$(grep "autoResume:" -A5 "$CONFIG_FILE" 2>/dev/null | grep "enabled:" | sed 's/.*enabled:[[:space:]]*//' | tr -d '"' || true)
+  [[ "$ENABLED" == "false" ]] && exit 0
+
+  # Read thresholds
+  CUSTOM_AUTO=$(grep "autoResume:" -A5 "$CONFIG_FILE" 2>/dev/null | grep "autoThresholdMinutes:" | sed 's/.*autoThresholdMinutes:[[:space:]]*//' | tr -d '"' || true)
+  [[ -n "$CUSTOM_AUTO" ]] && AUTO_THRESHOLD_MIN="$CUSTOM_AUTO"
+
+  CUSTOM_PROMPT=$(grep "autoResume:" -A5 "$CONFIG_FILE" 2>/dev/null | grep "promptThresholdHours:" | sed 's/.*promptThresholdHours:[[:space:]]*//' | tr -d '"' || true)
+  [[ -n "$CUSTOM_PROMPT" ]] && PROMPT_THRESHOLD_HOURS="$CUSTOM_PROMPT"
+fi
+
+# Don't overwrite a compact-pending flag for this session (compaction takes priority)
+if [[ -f "$FLAG_FILE" ]]; then
+  EXISTING_TYPE=$(grep "^type=" "$FLAG_FILE" 2>/dev/null | sed 's/^type=//' || true)
+  [[ "$EXISTING_TYPE" == "compact" ]] && exit 0
+fi
+
+# Clean up stale flag files from other sessions (older than 1 hour)
+find "$FLAG_DIR" -name "resume-pending-*" -mmin +60 -delete 2>/dev/null || true
+
+# Find most recent checkpoint matching current repo path
+BEST_FILE=""
+BEST_LAST_ACTIVE=""
+BEST_LAST_ACTIVE_EPOCH=0
+
+if [[ -d "$SESSIONS_DIR" ]]; then
+  for f in "$SESSIONS_DIR"/*.yaml; do
+    [[ -f "$f" ]] || continue
+    REPO_PATH=$(grep "^repo_path:" "$f" 2>/dev/null | sed 's/^repo_path:[[:space:]]*//' | tr -d '"' || true)
+    if [[ "$REPO_PATH" == "$CWD" ]]; then
+      LAST_ACTIVE=$(grep "^last_active:" "$f" 2>/dev/null | sed 's/^last_active:[[:space:]]*//' | tr -d '"' || true)
+      if [[ -n "$LAST_ACTIVE" ]]; then
+        # Convert to epoch for comparison (TZ=UTC because timestamps are stored as UTC)
+        LA_EPOCH=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$LAST_ACTIVE" +%s 2>/dev/null || date -d "$LAST_ACTIVE" +%s 2>/dev/null || echo 0)
+        if [[ "$LA_EPOCH" -gt "$BEST_LAST_ACTIVE_EPOCH" ]]; then
+          BEST_FILE="$f"
+          BEST_LAST_ACTIVE="$LAST_ACTIVE"
+          BEST_LAST_ACTIVE_EPOCH="$LA_EPOCH"
+        fi
+      fi
+    fi
+  done
+fi
+
+# No checkpoint found — clean start
+[[ -z "$BEST_FILE" ]] && exit 0
+
+# Calculate time gap
+GAP_SECONDS=$((NOW_EPOCH - BEST_LAST_ACTIVE_EPOCH))
+GAP_MINUTES=$((GAP_SECONDS / 60))
+GAP_HOURS=$((GAP_MINUTES / 60))
+
+# Determine mode
+MODE=""
+if [[ "$GAP_MINUTES" -lt "$AUTO_THRESHOLD_MIN" ]]; then
+  MODE="auto-resume"
+elif [[ "$GAP_HOURS" -lt "$PROMPT_THRESHOLD_HOURS" ]]; then
+  MODE="prompted"
+else
+  MODE="hint"
+fi
+
+# Human-readable time gap
+if [[ "$GAP_MINUTES" -lt 60 ]]; then
+  TIME_AGO="${GAP_MINUTES} minutes ago"
+elif [[ "$GAP_HOURS" -lt 24 ]]; then
+  TIME_AGO="${GAP_HOURS} hours ago"
+else
+  GAP_DAYS=$((GAP_HOURS / 24))
+  TIME_AGO="${GAP_DAYS} days ago"
+fi
+
+# Extract checkpoint info
+CHECKPOINT_TASK=$(awk '/^task:/{found=1; next} found && /^  name:/{sub(/^  name:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$BEST_FILE" 2>/dev/null || true)
+CHECKPOINT_STEP=$(grep "^current_step:" "$BEST_FILE" 2>/dev/null | sed 's/^current_step:[[:space:]]*//' | tr -d '"' || true)
+CHECKPOINT_ARCHIVE=$(awk '/^task:/{found=1; next} found && /^  archive_path:/{sub(/^  archive_path:[[:space:]]*/, ""); gsub(/"/, ""); print; exit}' "$BEST_FILE" 2>/dev/null || true)
+
+# Get git info
+GIT_BRANCH=""
+GIT_COMMIT=""
+if [[ -d "$CWD/.git" ]] || git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
+  GIT_BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null || true)
+  GIT_COMMIT=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null || true)
+fi
+
+REPO_NAME=$(basename "$CWD")
+
+# Write resume-pending flag
+cat > "$FLAG_FILE" << EOF
+type=restart
+mode=$MODE
+time_ago=$TIME_AGO
+checkpoint=$BEST_FILE
+task=$CHECKPOINT_TASK
+current_step=$CHECKPOINT_STEP
+archive_path=$CHECKPOINT_ARCHIVE
+repo_path=$CWD
+repo_name=$REPO_NAME
+branch=$GIT_BRANCH
+commit=$GIT_COMMIT
+session_id=$SESSION_ID
+timestamp=$TIMESTAMP
+EOF
+
+exit 0
