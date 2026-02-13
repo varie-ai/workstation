@@ -99,14 +99,15 @@ Workstation runs entirely on your machine. No telemetry, no analytics, no data s
 
 ### Voice Control Setup
 1. Click the gear icon in Workstation
-2. Enable Smart Routing, choose provider (Gemini recommended)
-3. Enter your API key
+2. Select your speech engine and voice routing mode
+3. Enter your API key (if using Gemini)
 4. Press **Ctrl+V** or click the mic to speak
 
-| Mode | Speed | Accuracy | Offline |
-|------|-------|----------|---------|
-| Apple Speech | Fast | Good | Yes |
-| Direct Audio (Gemini) | Medium | Excellent | No |
+| Engine | Speed | Accuracy | Offline | Notes |
+|--------|-------|----------|---------|-------|
+| WhisperKit | Fast | Excellent | Yes | **Recommended for Apple Silicon.** Defaults to `base` model; we recommend selecting `large-v3-turbo` for best accuracy (~1 min first-time download + compile, ~1s load thereafter). |
+| Apple Speech | Fast | Good | Yes | Built-in macOS speech recognition. No setup required. |
+| Direct Audio (Gemini) | Medium | Excellent | No | Requires Gemini API key. Best for non-Apple Silicon machines. |
 
 macOS will prompt for **Microphone** and **Speech Recognition** permissions on first use.
 
