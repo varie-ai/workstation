@@ -296,18 +296,23 @@ function quotePathIfNeeded(path: string): string {
 function setupTerminalDragDrop(container: HTMLElement, sessionId: string): void {
   // dragenter + dragover both need preventDefault for drop to fire reliably
   container.addEventListener('dragenter', (e) => {
+    // Let session drags bubble to the cell for grid swap handling
+    if (e.dataTransfer?.types.includes(SESSION_DRAG_TYPE)) return;
     e.preventDefault();
     e.stopPropagation();
     container.classList.add('drag-over');
   });
 
   container.addEventListener('dragover', (e) => {
+    // Let session drags bubble to the cell for grid swap handling
+    if (e.dataTransfer?.types.includes(SESSION_DRAG_TYPE)) return;
     e.preventDefault();
     e.stopPropagation();
     container.classList.add('drag-over');
   });
 
   container.addEventListener('dragleave', (e) => {
+    if (e.dataTransfer?.types.includes(SESSION_DRAG_TYPE)) return;
     e.preventDefault();
     e.stopPropagation();
     // Only remove highlight when truly leaving the container, not entering a child
@@ -322,6 +327,8 @@ function setupTerminalDragDrop(container: HTMLElement, sessionId: string): void 
   });
 
   container.addEventListener('drop', (e) => {
+    // Let session drags bubble to the cell for grid swap handling
+    if (e.dataTransfer?.types.includes(SESSION_DRAG_TYPE)) return;
     e.preventDefault();
     e.stopPropagation();
     container.classList.remove('drag-over');
