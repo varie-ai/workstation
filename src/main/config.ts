@@ -151,6 +151,43 @@ export function setSkipPermissions(enabled: boolean): void {
   writeConfigBool('skipPermissions', enabled);
 }
 
+// ============================================================================
+// Notification gating
+// ============================================================================
+
+/**
+ * When false (default), bridge notifications are only sent when Remote mode is ON.
+ * When true, notifications are always sent regardless of Remote mode.
+ */
+export function getNotifyAlways(): boolean {
+  return readConfigBool('notifyAlways');
+}
+
+export function setNotifyAlways(enabled: boolean): void {
+  writeConfigBool('notifyAlways', enabled);
+}
+
+// ============================================================================
+// Notification channels
+// ============================================================================
+
+/**
+ * Get the selected notification channels.
+ * Returns comma-separated "channel:target" pairs (e.g. "telegram:123456789").
+ * Empty string means "all channels" (default).
+ */
+export function getNotificationChannels(): string {
+  return readConfigString('notificationChannels', '');
+}
+
+/**
+ * Set the selected notification channels.
+ * Pass empty string for "all channels".
+ */
+export function setNotificationChannels(channels: string): void {
+  writeConfigString('notificationChannels', channels);
+}
+
 /**
  * Get Claude CLI flags based on workstation config.
  * Reads fresh from disk each call (no caching) so toggling

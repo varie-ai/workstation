@@ -437,6 +437,114 @@ export class SessionManager {
   }
 
   /**
+   * Dispatch multiple answers for Claude Code's AskUserQuestion.
+   *
+   * Single-select: writing a number auto-advances to next question (no \r needed).
+   * Multi-select: writing numbers toggles them. Use 'next' token to arrow-down
+   * to the "Next" button and press Enter. Requires optionCounts to calculate arrows.
+   *
+   * Special tokens in answers array:
+   *   'enter' — sends \r
+   *   'next'  — arrows down to Next/Submit button, then \r (needs optionCounts)
+   *
+   * @param optionCounts Array of option counts per multi-select question (including "Other").
+   *   Indexed by 'next' token order (one entry per 'next' token, NOT per question).
+   *   Used to calculate arrow-downs to reach Next/Submit button.
+   * @param chatArrows If set, skip normal answers and arrow-down this many times to
+   *   select "Chat about this". Based on first question only:
+   *   multi-select: optCount + 1, single-select: optCount.
+   */
+  dispatchAnswers(sessionId: string, answers: string[], delayMs: number = 2000, optionCounts?: number[], chatArrows?: number): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      log('WARN', `Cannot dispatch answers to session ${sessionId}: not found`);
+      return false;
+    }
+    if (session.isExternal) {
+      log('WARN', `Cannot dispatch answers to external session ${sessionId}`);
+      return false;
+    }
+    if (answers.length === 0 && !chatArrows) {
+      log('WARN', `No answers to dispatch to ${sessionId}`);
+      return false;
+    }
+
+    const ARROW_DOWN = '\x1b[B';
+
+    // "Chat about this" mode — arrow down to the option and confirm
+    if (chatArrows && chatArrows > 0) {
+      log('INFO', `Dispatching "Chat about this" to ${sessionId}: ${chatArrows} arrows`);
+      const sendChatArrows = (remaining: number) => {
+        if (remaining > 0) {
+          session.pty.write(ARROW_DOWN);
+          setTimeout(() => sendChatArrows(remaining - 1), 100);
+        } else {
+          setTimeout(() => {
+            session.pty.write('\r');
+            log('DEBUG', `"Chat about this" selected (${chatArrows} arrows + Enter)`);
+          }, 200);
+        }
+      };
+      sendChatArrows(chatArrows);
+      session.lastActive = new Date();
+      return true;
+    }
+
+    log('INFO', `Dispatching ${answers.length} answers to ${sessionId}: [${answers.join(', ')}] (delay=${delayMs}ms, optionCounts=${optionCounts || 'none'})`);
+
+    let questionIdx = 0;   // Which multi-select question we're on (indexes into optionCounts)
+
+    const writeNext = (index: number) => {
+      if (index < answers.length) {
+        const token = answers[index];
+
+        if (token === 'next' || token.startsWith('next:')) {
+          // Navigate to "Next"/"Submit" button and press Enter for multi-select.
+          // Typing numbers toggles checkboxes but does NOT move the cursor.
+          // Cursor stays at position 1. Next/Submit is after all options.
+          // Send arrows one at a time with delays — bulk writes aren't parsed correctly.
+          // Arrow count: prefer inline next:N, fallback to optionCounts[questionIdx].
+          const inlineCount = token.includes(':') ? parseInt(token.split(':')[1], 10) : NaN;
+          const optCount = !isNaN(inlineCount) ? inlineCount : (optionCounts?.[questionIdx] ?? 0);
+          const arrowsNeeded = optCount > 0 ? optCount : 1;
+          log('DEBUG', `Answer ${index + 1}/${answers.length}: [next] ${arrowsNeeded} arrows (optCount=${optCount}, qIdx=${questionIdx})`);
+          const sendArrows = (remaining: number) => {
+            if (remaining > 0) {
+              session.pty.write(ARROW_DOWN);
+              setTimeout(() => sendArrows(remaining - 1), 100);
+            } else {
+              // All arrows sent, now press Enter
+              setTimeout(() => {
+                session.pty.write('\r');
+                questionIdx++;
+                setTimeout(() => writeNext(index + 1), delayMs);
+              }, 200);
+            }
+          };
+          sendArrows(arrowsNeeded);
+          return;
+        } else if (token === 'enter') {
+          session.pty.write('\r');
+          log('DEBUG', `Answer ${index + 1}/${answers.length}: [enter]`);
+        } else {
+          session.pty.write(token);
+          log('DEBUG', `Answer ${index + 1}/${answers.length}: "${token}"`);
+        }
+        setTimeout(() => writeNext(index + 1), delayMs);
+      } else {
+        // All answers written — always send final \r to submit all answers
+        // (even after 'next', the overall "Submit answers" confirmation still needs Enter)
+        session.pty.write('\r');
+        log('DEBUG', `Final Enter sent to submit all answers`);
+      }
+    };
+
+    writeNext(0);
+    session.lastActive = new Date();
+    return true;
+  }
+
+  /**
    * Check if Claude is likely running in a session
    * Based on recent activity (within last 60s suggests active session)
    */

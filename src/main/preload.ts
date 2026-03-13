@@ -88,6 +88,9 @@ export interface WorkstationAPI {
   onSessionClosed: (callback: (sessionId: string) => void) => void;
   onSessionUpdated: (callback: (session: SessionInfo) => void) => void;
   onPluginEvent: (callback: (event: unknown) => void) => void;
+  onFocusSession: (callback: (sessionId: string) => void) => void;
+  onSetRemoteMode: (callback: (enabled: boolean) => void) => void;
+  toggleRemoteMode: (enabled: boolean) => void;
   onWindowShow: (callback: () => void) => void;
 
   // Voice capture
@@ -141,6 +144,11 @@ export interface WorkstationAPI {
   // Config
   getSkipPermissions: () => Promise<boolean>;
   setSkipPermissions: (enabled: boolean) => Promise<boolean>;
+  getNotifyAlways: () => Promise<boolean>;
+  setNotifyAlways: (enabled: boolean) => Promise<boolean>;
+  getNotificationChannels: () => Promise<string>;
+  setNotificationChannels: (channels: string) => Promise<string>;
+  getAvailableChannels: () => Promise<{ channels: Array<{ name: string; targets: string[] }> }>;
 
   // Dialogs
   confirmDialog: (message: string, detail?: string) => Promise<boolean>;
@@ -205,6 +213,20 @@ contextBridge.exposeInMainWorld('workstation', {
       callback(pluginEvent);
     });
   },
+
+  onFocusSession: (callback: (sessionId: string) => void) => {
+    ipcRenderer.on('focus:session', (_event, data: { sessionId: string }) => {
+      callback(data.sessionId);
+    });
+  },
+
+  onSetRemoteMode: (callback: (enabled: boolean) => void) => {
+    ipcRenderer.on('set:remote-mode', (_event, data: { enabled: boolean }) => {
+      callback(data.enabled);
+    });
+  },
+
+  toggleRemoteMode: (enabled: boolean) => ipcRenderer.send('toggle-remote-mode', enabled),
 
   // Window visibility (ISSUE-040)
   onWindowShow: (callback: () => void) => {
@@ -279,6 +301,11 @@ contextBridge.exposeInMainWorld('workstation', {
   // Config
   getSkipPermissions: () => ipcRenderer.invoke('config:getSkipPermissions'),
   setSkipPermissions: (enabled: boolean) => ipcRenderer.invoke('config:setSkipPermissions', enabled),
+  getNotifyAlways: () => ipcRenderer.invoke('config:getNotifyAlways'),
+  setNotifyAlways: (enabled: boolean) => ipcRenderer.invoke('config:setNotifyAlways', enabled),
+  getNotificationChannels: () => ipcRenderer.invoke('config:getNotificationChannels'),
+  setNotificationChannels: (channels: string) => ipcRenderer.invoke('config:setNotificationChannels', channels),
+  getAvailableChannels: () => ipcRenderer.invoke('config:getAvailableChannels'),
 
   // Dialogs
   confirmDialog: (message: string, detail?: string) =>

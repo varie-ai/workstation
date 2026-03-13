@@ -46,6 +46,7 @@ export interface VoiceStartOptions {
   locale: string;
   directAudioRouting: boolean;
   whisperKitModel?: string;
+  prompt?: string;
 }
 
 type VoiceEventCallback = (event: VoiceEvent) => void;
@@ -241,6 +242,9 @@ export class NativeVoiceCapture {
       if (options.speechEngine === 'whisperkit') {
         args.push('--model', options.whisperKitModel || 'base');
         args.push('--models-dir', WHISPERKIT_MODELS_DIR);
+        if (options.prompt) {
+          args.push('--prompt', options.prompt);
+        }
       }
 
       this.process = spawn(binaryPath, args);

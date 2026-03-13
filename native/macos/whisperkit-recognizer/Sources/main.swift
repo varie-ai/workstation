@@ -10,6 +10,7 @@
  *   whisperkit-recognizer --models-dir ~/.varie/models/whisperkit
  *   whisperkit-recognizer --locale en-US                     # Language hint
  *   whisperkit-recognizer --audio-output /tmp/out.wav        # Also save audio to file
+ *   whisperkit-recognizer --prompt "varie, algo_trading"    # Bias vocabulary toward key terms
  *   whisperkit-recognizer --check                            # Check if WhisperKit is available
  *   whisperkit-recognizer --list-models                      # List available & downloaded models
  *   whisperkit-recognizer --download-model openai_whisper-base  # Download a model
@@ -105,11 +106,14 @@ class WhisperKitRecognizer {
     private var isRecording = false
     private var startFailed = false
 
-    init(model: String, modelsDir: String, locale: String?, audioOutput: String?) {
+    private let promptText: String?
+
+    init(model: String, modelsDir: String, locale: String?, audioOutput: String?, prompt: String?) {
         self.modelName = model
         self.modelsDir = modelsDir
         self.locale = locale
         self.audioOutputPath = audioOutput
+        self.promptText = prompt
         self.tempAudioPath = NSTemporaryDirectory() + "whisperkit-\(ProcessInfo.processInfo.processIdentifier).wav"
     }
 
@@ -262,6 +266,15 @@ class WhisperKitRecognizer {
                 options.verbose = false
                 if let lang = whisperLanguageCode(from: self.locale) {
                     options.language = lang
+                }
+
+                // Supply prompt tokens to bias vocabulary toward expected terms
+                if let prompt = self.promptText, !prompt.isEmpty,
+                   let tokenizer = pipe.tokenizer {
+                    let tokens = tokenizer.encode(text: prompt)
+                    if !tokens.isEmpty {
+                        options.promptTokens = tokens
+                    }
                 }
 
                 let results = try await pipe.transcribe(
@@ -452,12 +465,13 @@ func handleWarmup(model: String, modelsDir: String) {
     RunLoop.main.run()
 }
 
-func handleTranscribe(model: String, modelsDir: String, locale: String?, audioOutput: String?) {
+func handleTranscribe(model: String, modelsDir: String, locale: String?, audioOutput: String?, prompt: String?) {
     let recognizer = WhisperKitRecognizer(
         model: model,
         modelsDir: modelsDir,
         locale: locale,
-        audioOutput: audioOutput
+        audioOutput: audioOutput,
+        prompt: prompt
     )
 
     // Use DispatchSource for signal handling (safer than C signal() in Swift).
@@ -505,6 +519,7 @@ let modelsDir = getArg("--models-dir")
 let model = getArg("--model") ?? "base"
 let locale = getArg("--locale")
 let audioOutput = getArg("--audio-output")
+let prompt = getArg("--prompt")
 
 // Ensure models directory exists
 try? FileManager.default.createDirectory(
@@ -523,5 +538,5 @@ if args.contains("--check") {
     handleWarmup(model: model, modelsDir: modelsDir)
 } else {
     // Default: transcription mode (record → SIGTERM → transcribe → exit)
-    handleTranscribe(model: model, modelsDir: modelsDir, locale: locale, audioOutput: audioOutput)
+    handleTranscribe(model: model, modelsDir: modelsDir, locale: locale, audioOutput: audioOutput, prompt: prompt)
 }

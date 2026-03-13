@@ -46,7 +46,13 @@
               <button class="layout-btn" data-layout="2x2" title="2x2 Layout (Ctrl+4)">
                 <span class="layout-icon"><span></span><span></span><span></span><span></span></span>
               </button>
+              <button class="layout-btn" data-layout="focus" id="focus-layout-btn" title="Focus Layout — full screen, no Manager (Ctrl+F)">
+                <span class="layout-icon focus-icon"><span></span></span>
+              </button>
             </div>
+            <button id="remote-mode-toggle" class="toggle-btn" title="Remote Mode — allow bridge auto-focus">
+              <span class="toggle-label">Remote</span>
+            </button>
             <button id="skip-perms-toggle" class="toggle-btn" title="Skip Permissions for new sessions">
               <span class="toggle-label">Perms</span>
             </button>
@@ -106,7 +112,7 @@
         <span id="voice-interim"></span>
         <span id="voice-final"></span>
       </div>
-      <button id="voice-settings-btn" title="Voice Settings">
+      <button id="voice-settings-btn" title="Settings">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -118,7 +124,7 @@
   <!-- Voice Settings Modal -->
   <div id="voice-settings-modal" class="modal hidden">
     <div class="modal-content voice-settings-content">
-      <h3>Voice Routing Settings</h3>
+      <h3>Settings</h3>
       <form id="voice-settings-form">
         <div class="form-group">
           <label for="voice-routing-mode">Voice Routing</label>
@@ -217,6 +223,26 @@
         <div class="form-group">
           <button type="button" id="test-connection-btn" class="secondary-btn">Test Connection</button>
           <span id="connection-status" class="connection-status"></span>
+        </div>
+
+        <!-- Notification gating -->
+        <div class="settings-divider"></div>
+        <h4 class="settings-section-title">Agent Notifications</h4>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="notify-always">
+            <span>Always Send Notifications</span>
+          </label>
+          <span class="form-hint">When unchecked, notifications only send while Remote mode is on. Requires agent integration (e.g. OpenClaw + Telegram). See <a href="https://github.com/varie-ai/workstation#agent-setup" style="color: var(--accent);">Agent Setup</a> for details.</span>
+        </div>
+
+        <div class="form-group" id="notification-channels-group">
+          <label for="notification-channel-select">Notification Channel</label>
+          <select id="notification-channel-select">
+            <option value="">No channels configured</option>
+          </select>
+          <span class="form-hint" id="notification-channels-hint">Channel used for Remote mode notifications.</span>
         </div>
 
         <!-- Cloud Relay / Mobile Access (hidden — not yet public) -->

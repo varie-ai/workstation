@@ -16,10 +16,13 @@ import { RepoResolver, RepoInfo } from './repo-resolver';
 import { syncDiscoveredRepos, injectVarieSectionToClaudeMd } from './manager-workspace';
 import { loadLLMSettings } from './llm/settings';
 import { getClaudeFlags } from './config';
+import { SessionReadinessTracker } from './session-readiness';
 
 export class Dispatcher {
   private sessionManager: SessionManager;
   private repoResolver: RepoResolver;
+  private readiness = new SessionReadinessTracker();
+  public remoteModeAllowed = false;
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -37,16 +40,37 @@ export class Dispatcher {
         return this.listWorkers();
 
       case 'dispatch':
-        return this.dispatchDirect(event);
+        return this.handleRemoteFlag(event, () => this.dispatchDirect(event));
+
+      case 'dispatch_answers':
+        return this.handleRemoteFlag(event, () => this.dispatchAnswersDirect(event));
 
       case 'route':
-        return this.routeToWorker(event);
+        return this.handleRemoteFlag(event, () => this.routeToWorker(event));
 
       case 'create_worker':
-        return this.createWorker(event);
+        return this.handleRemoteFlag(event, () => this.createWorker(event));
 
       case 'discover_projects':
         return this.discoverProjects(event);
+
+      case 'focus_session':
+        return this.focusSession(event);
+
+      case 'set_remote_mode':
+        return this.setRemoteMode(event);
+
+      case 'send_escape':
+        return this.sendControlKey(event, '\x1b', 'escape');
+
+      case 'send_interrupt':
+        return this.sendControlKey(event, '\x03', 'interrupt');
+
+      case 'send_enter':
+        return this.sendControlKey(event, '\r', 'enter');
+
+      case 'screenshot':
+        return this.validateScreenshot(event);
 
       default:
         return {
@@ -105,9 +129,10 @@ export class Dispatcher {
   }
 
   /**
-   * Dispatch directly to a specific worker by session ID
+   * Dispatch directly to a specific worker by session ID.
+   * Awaits session readiness if the session was recently created (ISSUE-016).
    */
-  private dispatchDirect(event: PluginEvent): DispatchResponse {
+  private async dispatchDirect(event: PluginEvent): Promise<DispatchResponse> {
     const targetIdResult = this.validateString(event.payload?.targetSessionId, 'targetSessionId', 128);
     if (typeof targetIdResult !== 'string') return targetIdResult;
     const targetId = targetIdResult;
@@ -128,6 +153,15 @@ export class Dispatcher {
       return {
         status: 'error',
         message: 'Cannot dispatch to external session (not implemented)',
+      };
+    }
+
+    // ISSUE-016: await readiness if session was just created
+    const ready = await this.awaitSessionReady(targetId);
+    if (!ready) {
+      return {
+        status: 'error',
+        message: `Session ${targetId} did not become ready in time`,
       };
     }
 
@@ -153,6 +187,64 @@ export class Dispatcher {
         status: 'error',
         message: 'Failed to dispatch to session',
       };
+    }
+  }
+
+  /**
+   * Dispatch multiple answers for Claude Code's AskUserQuestion.
+   * Each answer is written without Enter (Claude auto-advances),
+   * final Enter submits all answers.
+   * Awaits session readiness if recently created (ISSUE-016).
+   */
+  private async dispatchAnswersDirect(event: PluginEvent): Promise<DispatchResponse> {
+    const targetIdResult = this.validateString(event.payload?.targetSessionId, 'targetSessionId', 128);
+    if (typeof targetIdResult !== 'string') return targetIdResult;
+    const targetId = targetIdResult;
+
+    const answers = event.payload?.answers;
+    const hasChatArrows = typeof event.payload?.chatArrows === 'number';
+    if (!Array.isArray(answers) || answers.length === 0) {
+      if (!hasChatArrows) {
+        return { status: 'error', message: 'Missing or empty answers array in payload' };
+      }
+    }
+
+    // Validate each answer is a short string
+    for (let i = 0; i < answers.length; i++) {
+      if (typeof answers[i] !== 'string' || answers[i].length === 0 || answers[i].length > 256) {
+        return { status: 'error', message: `Invalid answer at index ${i}` };
+      }
+    }
+
+    const session = this.sessionManager.getSession(targetId);
+    if (!session) {
+      return { status: 'error', message: `Session not found: ${targetId}` };
+    }
+
+    if (session.isExternal) {
+      return { status: 'error', message: 'Cannot dispatch to external session (not implemented)' };
+    }
+
+    // ISSUE-016: await readiness if session was just created
+    const ready = await this.awaitSessionReady(targetId);
+    if (!ready) {
+      return { status: 'error', message: `Session ${targetId} did not become ready in time` };
+    }
+
+    const delayMs = typeof event.payload?.delayMs === 'number' ? event.payload.delayMs : 2000;
+    const optionCounts = Array.isArray(event.payload?.optionCounts) ? event.payload.optionCounts as number[] : undefined;
+    const chatArrows = typeof event.payload?.chatArrows === 'number' ? event.payload.chatArrows : undefined;
+    const success = this.sessionManager.dispatchAnswers(targetId, answers, delayMs, optionCounts, chatArrows);
+
+    if (success) {
+      log('INFO', `Dispatched ${answers.length} answers to ${targetId}: [${answers.join(', ')}]`);
+      return {
+        status: 'ok',
+        received: 'dispatch_answers',
+        targetSessionId: targetId,
+      };
+    } else {
+      return { status: 'error', message: 'Failed to dispatch answers to session' };
     }
   }
 
@@ -207,9 +299,9 @@ export class Dispatcher {
 
           log('INFO', `Auto-created worker for ${resolved.repo.name} (${sessionId})`);
 
-          // Wait for Claude to be ready (event-based, up to 30s)
-          log('INFO', `Waiting for Claude to be ready in ${resolved.repo.name}...`);
-          const ready = await this.sessionManager.waitForClaudeReady(sessionId, 30000);
+          // ISSUE-016: use shared readiness tracker (same as create_worker path)
+          this.readiness.register(sessionId, this.sessionManager.waitForClaudeReady(sessionId, 30000));
+          const ready = await this.awaitSessionReady(sessionId);
 
           if (!ready) {
             return {
@@ -219,9 +311,6 @@ export class Dispatcher {
               autoCreated: true,
             };
           }
-
-          // Small buffer after output settled — readline should be ready now
-          await this.delay(500);
 
           // Check confirmBeforeSend setting (ISSUE-034)
           const llmSettings = loadLLMSettings();
@@ -297,7 +386,8 @@ export class Dispatcher {
   }
 
   /**
-   * Create a new worker session
+   * Create a new worker session.
+   * Registers readiness tracking so subsequent dispatches auto-wait (ISSUE-016).
    */
   private createWorker(event: PluginEvent): DispatchResponse {
     const repoResult = this.validateString(event.payload?.repo, 'repo', 256);
@@ -320,6 +410,9 @@ export class Dispatcher {
       const sessionId = this.sessionManager.createSession(repo, validatedPath, 'worker', taskId, claudeFlags || undefined);
       log('INFO', `Created worker: ${repo} at ${validatedPath} (${sessionId})`);
 
+      // ISSUE-016: track readiness in background — dispatches will auto-wait
+      this.readiness.register(sessionId, this.sessionManager.waitForClaudeReady(sessionId, 30000));
+
       return {
         status: 'ok',
         received: 'create_worker',
@@ -331,6 +424,125 @@ export class Dispatcher {
         message: err instanceof Error ? err.message : 'Failed to create worker',
       };
     }
+  }
+
+  /**
+   * Focus a single session full-screen (for agent screenshot mode).
+   * Validates that the session exists; IPC to renderer is handled by index.ts.
+   */
+  private focusSession(event: PluginEvent): DispatchResponse {
+    if (!this.remoteModeAllowed) {
+      return { status: 'error', message: 'Remote mode is not enabled' };
+    }
+
+    const targetIdResult = this.validateString(event.payload?.targetSessionId, 'targetSessionId', 128);
+    if (typeof targetIdResult !== 'string') return targetIdResult;
+    const targetId = targetIdResult;
+
+    const session = this.sessionManager.getSession(targetId);
+    if (!session) {
+      return { status: 'error', message: `Session not found: ${targetId}` };
+    }
+
+    return {
+      status: 'ok',
+      received: 'focus_session',
+      targetSessionId: targetId,
+    };
+  }
+
+  private handleRemoteFlag(event: PluginEvent, handler: () => DispatchResponse | Promise<DispatchResponse>): DispatchResponse | Promise<DispatchResponse> {
+    if (event.payload?.remote === true && !this.remoteModeAllowed) {
+      this.remoteModeAllowed = true;
+      log('INFO', 'Remote mode auto-enabled by remote flag on dispatch');
+    }
+    return handler();
+  }
+
+  private setRemoteMode(event: PluginEvent): DispatchResponse {
+    const enabled = event.payload?.enabled;
+    if (typeof enabled !== 'boolean') {
+      return { status: 'error', message: 'Missing or invalid "enabled" boolean in payload' };
+    }
+
+    this.remoteModeAllowed = enabled;
+    log('INFO', `Remote mode ${enabled ? 'enabled' : 'disabled'}`);
+
+    return {
+      status: 'ok',
+      received: 'set_remote_mode',
+      enabled: this.remoteModeAllowed,
+    };
+  }
+
+  /**
+   * Send a raw control key to a session's PTY (escape, interrupt, enter).
+   */
+  private sendControlKey(event: PluginEvent, key: string, keyName: string): DispatchResponse {
+    const targetIdResult = this.validateString(event.payload?.targetSessionId, 'targetSessionId', 128);
+    if (typeof targetIdResult !== 'string') return targetIdResult;
+    const targetId = targetIdResult;
+
+    const session = this.sessionManager.getSession(targetId);
+    if (!session) {
+      return { status: 'error', message: `Session not found: ${targetId}` };
+    }
+
+    if (session.isExternal) {
+      return { status: 'error', message: 'Cannot send keys to external session (not implemented)' };
+    }
+
+    const success = this.sessionManager.write(targetId, key);
+    if (success) {
+      log('INFO', `Sent ${keyName} to ${targetId}`);
+      return {
+        status: 'ok',
+        received: event.type,
+        targetSessionId: targetId,
+      };
+    } else {
+      return { status: 'error', message: `Failed to send ${keyName} to session` };
+    }
+  }
+
+  /**
+   * Validate screenshot request. Actual capture is handled by index.ts
+   * (needs mainWindow access for capturePage).
+   */
+  private validateScreenshot(event: PluginEvent): DispatchResponse {
+    const mode = (event.payload?.mode as string) || 'session';
+
+    if (mode === 'session') {
+      if (!this.remoteModeAllowed) {
+        return { status: 'error', message: 'Remote mode is not enabled' };
+      }
+
+      const targetIdResult = this.validateString(event.payload?.targetSessionId, 'targetSessionId', 128);
+      if (typeof targetIdResult !== 'string') return targetIdResult;
+      const targetId = targetIdResult;
+
+      const session = this.sessionManager.getSession(targetId);
+      if (!session) {
+        return { status: 'error', message: `Session not found: ${targetId}` };
+      }
+
+      if (session.isExternal) {
+        return { status: 'error', message: 'Cannot screenshot external session (not implemented)' };
+      }
+
+      return {
+        status: 'ok',
+        received: 'screenshot',
+        targetSessionId: targetId,
+      };
+    } else if (mode === 'screen') {
+      return {
+        status: 'ok',
+        received: 'screenshot',
+      };
+    }
+
+    return { status: 'error', message: `Unknown screenshot mode: ${mode}` };
   }
 
   /**
@@ -427,6 +639,28 @@ export class Dispatcher {
     }
 
     return null;
+  }
+
+  /**
+   * ISSUE-016: Await session readiness before dispatching.
+   * Returns immediately for sessions that are already ready or untracked.
+   * For newly created sessions, waits for Claude startup + 500ms settle buffer.
+   */
+  private async awaitSessionReady(sessionId: string): Promise<boolean> {
+    if (this.readiness.isReady(sessionId)) return true;
+
+    log('INFO', `Waiting for session ${sessionId} to become ready...`);
+    const ready = await this.readiness.awaitReady(sessionId);
+
+    if (ready) {
+      // Post-ready settle buffer — readline needs a moment after Claude's prompt appears
+      await this.delay(500);
+      log('INFO', `Session ${sessionId} is ready`);
+    } else {
+      log('WARN', `Session ${sessionId} readiness timed out`);
+    }
+
+    return ready;
   }
 
   /**

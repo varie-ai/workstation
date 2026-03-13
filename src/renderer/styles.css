@@ -308,6 +308,16 @@ body.resizing-row * {
   grid-template: 1fr 1fr / 1fr 1fr;
 }
 
+/* Focus icon — single pane with bold border to distinguish from 1x1 */
+.layout-btn[data-layout="focus"] .layout-icon {
+  grid-template: 1fr / 1fr;
+}
+
+.layout-btn[data-layout="focus"] .layout-icon span {
+  border: 1.5px solid currentColor;
+  background: transparent;
+}
+
 /* Skip Permissions Toggle */
 .toggle-btn {
   display: flex;
@@ -1125,6 +1135,8 @@ body.resizing-row * {
 .voice-settings-content {
   min-width: 400px;
   max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .voice-settings-content .form-group select {
@@ -1169,6 +1181,10 @@ body.resizing-row * {
   width: auto;
   margin: 0;
   cursor: pointer;
+}
+
+#notification-channels-group.no-channels {
+  opacity: 0.6;
 }
 
 .api-key-input {

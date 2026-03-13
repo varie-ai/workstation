@@ -29,10 +29,19 @@ export interface PluginEvent {
     // Tool activity events (PostToolUse hook → daemon → relay)
     | 'tool_use'
     // Dispatch commands (orchestrator plugin → daemon → worker)
-    | 'dispatch'        // Send to specific worker by ID
-    | 'route'           // Auto-route via fuzzy match
+    | 'dispatch'          // Send to specific worker by ID
+    | 'dispatch_answers'  // Send multi-question answers (no Enter between, Enter at end)
+    | 'route'             // Auto-route via fuzzy match
     | 'list_workers'    // Get all workers with status
-    | 'create_worker';  // Create new worker session
+    | 'create_worker'    // Create new worker session
+    | 'focus_session'    // Focus a single session full-screen (for agent screenshots)
+    | 'set_remote_mode' // Enable/disable remote mode (bridge auto-focus control)
+    // Control key commands (remote interrupt/escape)
+    | 'send_escape'     // Send Escape key to session (cancel prompt/menu)
+    | 'send_interrupt'  // Send Ctrl+C to session (stop running process)
+    | 'send_enter'      // Send Enter key to session (confirm/dismiss)
+    // Screenshot
+    | 'screenshot';     // Capture session or screen screenshot
   sessionId: string;
   timestamp: number;
   context?: {
@@ -62,6 +71,10 @@ export interface DispatchResponse {
   suggestions?: string[];
   // For confirmBeforeSend mode (ISSUE-034)
   confirmBeforeSend?: boolean;
+  // For set_remote_mode
+  enabled?: boolean;
+  // For screenshot
+  imagePath?: string;
 }
 
 export interface WorkerInfo {
@@ -79,7 +92,7 @@ export type EventCallback = (event: PluginEvent) => void;
 export type DispatchHandler = (event: PluginEvent) => Promise<DispatchResponse>;
 
 // Dispatch command types that expect a response
-const DISPATCH_COMMANDS = ['dispatch', 'route', 'list_workers', 'create_worker', 'discover_projects'];
+const DISPATCH_COMMANDS = ['dispatch', 'dispatch_answers', 'route', 'list_workers', 'create_worker', 'discover_projects', 'focus_session', 'set_remote_mode', 'send_escape', 'send_interrupt', 'send_enter', 'screenshot'];
 
 const SOCKET_HEALTH_INTERVAL_MS = 10_000; // Check every 10s
 

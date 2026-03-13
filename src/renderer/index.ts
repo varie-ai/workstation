@@ -69,6 +69,8 @@ interface WorkstationAPI {
   onSessionClosed: (callback: (sessionId: string) => void) => void;
   onSessionUpdated: (callback: (session: SessionInfo) => void) => void;
   onPluginEvent: (callback: (event: unknown) => void) => void;
+  onSetRemoteMode: (callback: (enabled: boolean) => void) => void;
+  toggleRemoteMode: (enabled: boolean) => void;
   onWindowShow: (callback: () => void) => void;
   // Voice
   voiceCheck: () => Promise<boolean>;
@@ -97,6 +99,12 @@ interface WorkstationAPI {
   }>;
   confirmDialog: (message: string, detail?: string) => Promise<boolean>;
   getPathForFile: (file: File) => string;
+  // Config
+  getNotifyAlways: () => Promise<boolean>;
+  setNotifyAlways: (enabled: boolean) => Promise<boolean>;
+  getNotificationChannels: () => Promise<string>;
+  setNotificationChannels: (channels: string) => Promise<string>;
+  getAvailableChannels: () => Promise<{ channels: Array<{ name: string; targets: string[] }> }>;
   quit: () => void;
 }
 
@@ -134,8 +142,12 @@ const gridPositions: (string | null)[] = [null, null, null, null];
 let activeWorkerId: string | null = null;
 
 // Layout state
-type LayoutPreset = '1x1' | '1x2' | '2x2';
+type LayoutPreset = '1x1' | '1x2' | '2x2' | 'focus';
 let currentLayout: LayoutPreset = '1x2';
+let previousLayout: LayoutPreset | null = null;
+
+// Remote mode state (allows bridge to auto-focus sessions for screenshots)
+let remoteModeActive = false;
 
 // Theme state
 let currentTheme: TerminalTheme = getDefaultTheme();
@@ -480,6 +492,81 @@ function focusOrchestrator(): void {
 
 function updateOrchestratorStatus(status: string): void {
   if (orchestratorStatusEl) orchestratorStatusEl.textContent = status;
+}
+
+// ============================================================================
+// Focus Mode (Agent Screenshot Mode)
+// ============================================================================
+
+/**
+ * Enter focus mode for a specific session (bridge-triggered).
+ * Swaps the session to position 0, sets focus layout, and sets up
+ * auto-restore on keypress (which also disables remote mode).
+ */
+function enterFocusMode(sessionId: string): void {
+  const state = workers.get(sessionId);
+  if (!state) {
+    window.log.error(`enterFocusMode: session ${sessionId} not found`);
+    return;
+  }
+
+  // If already in focus layout, just re-focus to the new session
+  if (currentLayout === 'focus') {
+    window.log.info(`enterFocusMode: re-focusing to ${sessionId}`);
+    if (state.gridPosition === undefined) {
+      swapTabToGrid(sessionId);
+    } else if (state.gridPosition !== 0) {
+      const sessionInPos0 = gridPositions[0];
+      if (sessionInPos0) moveWorkerToTabs(sessionInPos0);
+      moveWorkerToGrid(sessionId, 0);
+    }
+    focusWorker(sessionId);
+    requestAnimationFrame(() => refitVisibleWorkers());
+    return;
+  }
+
+  window.log.info(`Entering focus mode for session: ${sessionId}`);
+
+  // 1. If session is in overflow tabs, swap it into grid
+  if (state.gridPosition === undefined) {
+    swapTabToGrid(sessionId);
+  }
+
+  // 2. If session is not in position 0, move it there
+  if (state.gridPosition !== 0) {
+    const sessionInPos0 = gridPositions[0];
+    if (sessionInPos0) moveWorkerToTabs(sessionInPos0);
+    moveWorkerToGrid(sessionId, 0);
+  }
+
+  // 3. Switch to focus layout (hides Manager + 1x1 grid)
+  setLayout('focus');
+
+  // 4. Focus the session
+  focusWorker(sessionId);
+
+  // 5. Auto-restore on first manual input (bridge-triggered only)
+  setupAutoRestore();
+}
+
+/**
+ * Set up auto-restore: first keypress exits focus layout and disables remote mode.
+ * Only used for bridge-triggered focus, not user-toggled focus layout.
+ */
+function setupAutoRestore(): void {
+  const restoreHandler = () => {
+    document.removeEventListener('keydown', restoreHandler, true);
+    // Exit focus layout
+    setLayout(previousLayout || '1x2');
+    // Disable remote mode
+    remoteModeActive = false;
+    updateRemoteModeUI(false);
+    window.workstation.toggleRemoteMode(false);
+  };
+  // Use capture phase + setTimeout so this handler doesn't fire on the current event
+  setTimeout(() => {
+    document.addEventListener('keydown', restoreHandler, true);
+  }, 500);
 }
 
 // ============================================================================
@@ -992,6 +1079,7 @@ function setupKeyboardShortcuts(): void {
     // Cmd+O: Focus orchestrator
     if (isMod && e.key === 'o') {
       e.preventDefault();
+      if (currentLayout === 'focus') setLayout(previousLayout || '1x2');
       focusOrchestrator();
       return;
     }
@@ -1008,6 +1096,17 @@ function setupKeyboardShortcuts(): void {
       e.preventDefault();
       const layoutMap: Record<string, LayoutPreset> = { '1': '1x1', '2': '1x2', '4': '2x2' };
       setLayout(layoutMap[e.key]);
+      return;
+    }
+
+    // Ctrl+F: Toggle focus layout
+    if (e.ctrlKey && !e.metaKey && e.key === 'f') {
+      e.preventDefault();
+      if (currentLayout === 'focus') {
+        setLayout(previousLayout || '1x2');
+      } else {
+        setLayout('focus');
+      }
       return;
     }
 
@@ -1060,6 +1159,7 @@ function setupResizeHandler(): void {
 function getVisibleCellCount(): number {
   switch (currentLayout) {
     case '1x1': return 1;
+    case 'focus': return 1;
     case '1x2': return 2;
     case '2x2': return 4;
     default: return 4;
@@ -1069,13 +1169,34 @@ function getVisibleCellCount(): number {
 function setLayout(layout: LayoutPreset): void {
   if (layout === currentLayout) return;
 
+  const leavingFocus = currentLayout === 'focus';
+  const enteringFocus = layout === 'focus';
+
   window.log.info(`Switching layout: ${currentLayout} -> ${layout}`);
+
+  // Save previous layout when entering focus (for restore)
+  if (enteringFocus && currentLayout !== 'focus') {
+    previousLayout = currentLayout;
+  }
+
   currentLayout = layout;
 
-  // Update grid CSS class
+  const orchestratorPanel = document.getElementById('orchestrator-panel');
+  const divider = document.getElementById('divider');
+
+  // Handle Manager panel visibility for focus layout
+  if (enteringFocus) {
+    if (orchestratorPanel) orchestratorPanel.style.display = 'none';
+    if (divider) divider.style.display = 'none';
+  } else if (leavingFocus) {
+    if (orchestratorPanel) orchestratorPanel.style.display = '';
+    if (divider) divider.style.display = '';
+  }
+
+  // Update grid CSS class (focus uses layout-1x1 since it's single-pane)
   if (workersGrid) {
     workersGrid.classList.remove('layout-1x1', 'layout-1x2', 'layout-2x2');
-    workersGrid.classList.add(`layout-${layout}`);
+    workersGrid.classList.add(`layout-${layout === 'focus' ? '1x1' : layout}`);
   }
 
   // Update layout button active states
@@ -1089,6 +1210,9 @@ function setLayout(layout: LayoutPreset): void {
 
   // Refit visible terminals after layout change
   requestAnimationFrame(() => {
+    if (leavingFocus && orchestratorState?.opened) {
+      orchestratorState.fitAddon.fit();
+    }
     refitVisibleWorkers();
   });
 }
@@ -1148,6 +1272,27 @@ function setupLayoutSelector(): void {
         setLayout(layout);
       }
     });
+  });
+}
+
+// ============================================================================
+// Remote Mode Toggle
+// ============================================================================
+
+function updateRemoteModeUI(enabled: boolean): void {
+  const btn = document.getElementById('remote-mode-toggle');
+  if (btn) btn.classList.toggle('active', enabled);
+}
+
+function setupRemoteModeToggle(): void {
+  const btn = document.getElementById('remote-mode-toggle');
+  if (!btn) return;
+
+  btn.addEventListener('click', () => {
+    remoteModeActive = !remoteModeActive;
+    updateRemoteModeUI(remoteModeActive);
+    window.workstation.toggleRemoteMode(remoteModeActive);
+    window.log.info(`Remote mode toggled: ${remoteModeActive}`);
   });
 }
 
@@ -1923,6 +2068,58 @@ async function showVoiceSettingsModal(): Promise<void> {
     connectionStatus.className = 'connection-status';
   }
 
+  // Populate notification gating setting
+  const notifyAlwaysCheckbox = document.getElementById('notify-always') as HTMLInputElement | null;
+  if (notifyAlwaysCheckbox) {
+    try {
+      notifyAlwaysCheckbox.checked = await window.workstation.getNotifyAlways();
+    } catch (err) {
+      window.log.warn('Could not load notifyAlways setting:', err);
+    }
+  }
+
+  // Populate notification channel dropdown
+  const channelSelect = document.getElementById('notification-channel-select') as HTMLSelectElement | null;
+  const channelsHintEl = document.getElementById('notification-channels-hint');
+  const channelsGroupEl = document.getElementById('notification-channels-group');
+
+  if (channelSelect) {
+    try {
+      const { channels } = await window.workstation.getAvailableChannels();
+      const saved = await window.workstation.getNotificationChannels();
+
+      channelSelect.innerHTML = '';
+
+      if (channels.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No channels configured';
+        channelSelect.appendChild(opt);
+        channelSelect.disabled = true;
+        if (channelsGroupEl) channelsGroupEl.classList.add('no-channels');
+        if (channelsHintEl) channelsHintEl.textContent = 'Install and configure OpenClaw with a messaging channel to enable notifications.';
+      } else {
+        for (const ch of channels) {
+          for (const target of ch.targets) {
+            const key = `${ch.name}:${target}`;
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = `${ch.name.charAt(0).toUpperCase() + ch.name.slice(1)} (${target})`;
+            channelSelect.appendChild(opt);
+          }
+        }
+        // Select saved value, or default to first option
+        if (saved && Array.from(channelSelect.options).some(o => o.value === saved)) {
+          channelSelect.value = saved;
+        } else {
+          channelSelect.selectedIndex = 0;
+        }
+      }
+    } catch (err) {
+      window.log.error('Failed to load notification channels:', err);
+    }
+  }
+
   // Populate Cloud Relay settings
   if (relayEnabledCheckbox && relayTokenInput) {
     try {
@@ -2206,6 +2403,26 @@ async function showVoiceSettingsModal(): Promise<void> {
     e.preventDefault();
 
     const newSettings = buildSettingsFromForm();
+
+    // Save notification gating setting
+    if (notifyAlwaysCheckbox) {
+      try {
+        await window.workstation.setNotifyAlways(notifyAlwaysCheckbox.checked);
+        window.log.info(`Notify always saved: ${notifyAlwaysCheckbox.checked}`);
+      } catch (err) {
+        window.log.error('Failed to save notifyAlways setting:', err);
+      }
+    }
+
+    // Save notification channel selection
+    if (channelSelect && !channelSelect.disabled) {
+      try {
+        await window.workstation.setNotificationChannels(channelSelect.value);
+        window.log.info(`Notification channel saved: ${channelSelect.value}`);
+      } catch (err) {
+        window.log.error('Failed to save notification channel:', err);
+      }
+    }
 
     // Save relay settings
     if (relayEnabledCheckbox && relayTokenInput) {
@@ -2909,6 +3126,17 @@ function setupIPCHandlers(): void {
     window.log.info('Plugin event:', event);
   });
 
+  // Focus session (bridge-triggered, requires remote mode)
+  window.workstation.onFocusSession((sessionId) => {
+    enterFocusMode(sessionId);
+  });
+
+  // Remote mode sync (bridge or wctl changed remote mode)
+  window.workstation.onSetRemoteMode((enabled) => {
+    remoteModeActive = enabled;
+    updateRemoteModeUI(enabled);
+  });
+
   // Cloud Relay commands — route through voice pipeline
   window.workstation.onRelayCommand((data) => {
     handleRelayCommand(data.command, data.requestId, data.source);
@@ -3035,6 +3263,7 @@ async function init(): Promise<void> {
   setupLayoutSelector();
   setupThemeSelector();
   setupSkipPermissionsToggle();
+  setupRemoteModeToggle();
   setupDividerResize();
   setupGridDividerResize();
   setupRowDividerResize();

@@ -9,7 +9,7 @@
  * - IPC communication with renderer
  */
 
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -19,17 +19,21 @@ import { SessionManager, TerminalSession } from './session-manager';
 import { CheckpointStore } from './checkpoint-store';
 import { Dispatcher } from './dispatcher';
 import { initManagerWorkspace, syncDiscoveredRepos } from './manager-workspace';
-import { getClaudeFlags, getSkipPermissions, setSkipPermissions, getMarketplacePluginInstall, getCloudRelayEnabled, setCloudRelayEnabled, getCloudRelayToken, setCloudRelayToken } from './config';
+import { getClaudeFlags, getSkipPermissions, setSkipPermissions, getMarketplacePluginInstall, getCloudRelayEnabled, setCloudRelayEnabled, getCloudRelayToken, setCloudRelayToken, getNotifyAlways, setNotifyAlways, getNotificationChannels, setNotificationChannels } from './config';
 import { RelayClient, RelayState, CommandResult, getMachineId } from './relay-client';
 import * as fs from 'fs';
+import { execFileSync } from 'child_process';
 import * as managerState from './manager-state';
 import { NativeVoiceCapture, VoiceEvent } from './voice-native';
+import { BridgeService } from './bridge-service';
+import { installOpenClawSkills } from './openclaw-skill-installer';
 import {
   loadLLMSettings,
   saveLLMSettings,
   testLLMConnection,
   routeVoiceCommand,
   isLLMRoutingAvailable,
+  loadAllProjectNames,
   PROVIDER_MODELS,
   SPEECH_LOCALES,
   LLMSettings,
@@ -66,11 +70,27 @@ let checkpointStore: CheckpointStore | null = null;
 let dispatcher: Dispatcher | null = null;
 let voiceCapture: NativeVoiceCapture | null = null;
 let relayClient: RelayClient | null = null;
+let bridgeService: BridgeService | null = null;
+let savedWindowBounds: Electron.Rectangle | null = null;
 let isQuitting = false;  // Track if app is quitting (vs just hiding window)
 
 // ============================================================================
 // Window Management
 // ============================================================================
+
+function applyRemoteModeResize(enabled: boolean): void {
+  if (!mainWindow) return;
+  if (enabled) {
+    if (!savedWindowBounds) {
+      savedWindowBounds = mainWindow.getBounds();
+    }
+    const display = screen.getDisplayMatching(savedWindowBounds);
+    mainWindow.setBounds({ x: savedWindowBounds.x, y: display.workArea.y, width: 600, height: display.workArea.height });
+  } else if (savedWindowBounds) {
+    mainWindow.setBounds(savedWindowBounds);
+    savedWindowBounds = null;
+  }
+}
 
 function createWindow(): void {
   log('INFO', 'Creating main window...');
@@ -112,6 +132,18 @@ function createWindow(): void {
   mainWindow.webContents.on('console-message', (_event, level, message) => {
     const levelStr = ['DEBUG', 'INFO', 'WARN', 'ERROR'][level] || 'LOG';
     log(`RENDERER:${levelStr}`, message);
+  });
+
+  // Open external links in system browser instead of navigating the app window
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   // On macOS, hide window instead of destroying it (ISSUE-040)
@@ -276,7 +308,70 @@ function initServices(): void {
   });
 
   // Set dispatch handler for orchestrator commands
-  socketServer.setDispatchHandler((event) => dispatcher!.handleCommand(event));
+  socketServer.setDispatchHandler(async (event) => {
+    const response = await dispatcher!.handleCommand(event);
+
+    // If focus_session succeeded, send IPC to renderer and wait for reflow
+    if (event.type === 'focus_session' && response.status === 'ok') {
+      mainWindow?.webContents.send('focus:session', {
+        sessionId: (event.payload as Record<string, unknown>)?.targetSessionId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    // Screenshot: focus session + capture, or full screen capture
+    if (event.type === 'screenshot' && response.status === 'ok') {
+      const mode = (event.payload as Record<string, unknown>)?.mode || 'session';
+      const screenshotDir = path.join(os.homedir(), '.openclaw', 'workspace', 'media');
+      if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
+      const outPath = path.join(screenshotDir, `screenshot-${Date.now()}.png`);
+
+      if (mode === 'session') {
+        const targetId = (event.payload as Record<string, unknown>)?.targetSessionId;
+        mainWindow?.webContents.send('focus:session', { sessionId: targetId });
+        // ISSUE-016: bumped from 500ms to 1000ms for slower terminal re-renders
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          const image = await mainWindow?.webContents.capturePage();
+          if (image && !image.isEmpty()) {
+            fs.writeFileSync(outPath, image.toPNG());
+            response.imagePath = outPath;
+          }
+        } catch (err) {
+          log('WARN', 'capturePage failed:', err instanceof Error ? err.message : err);
+        }
+      } else if (mode === 'screen') {
+        const displayNum = String((event.payload as Record<string, unknown>)?.displayNumber || 1);
+        try {
+          execFileSync('/usr/sbin/screencapture', ['-D', displayNum, '-x', '-o', outPath], { timeout: 5000 });
+          if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+            response.imagePath = outPath;
+          }
+        } catch (err) {
+          log('WARN', 'Screen capture failed:', err instanceof Error ? err.message : err);
+        }
+      }
+    }
+
+    // Auto-focus newly created worker session (only when created remotely via OpenClaw)
+    // Manager-created sessions should not auto-focus — it disrupts the orchestrator view
+    if (event.type === 'create_worker' && response.status === 'ok' && response.newSessionId && event.payload?.remote === true) {
+      mainWindow?.webContents.send('focus:session', {
+        sessionId: response.newSessionId,
+      });
+    }
+
+    // Sync remote mode UI + bridge when changed (explicit set or auto-enabled via remote flag)
+    if (response.status === 'ok' && (event.type === 'set_remote_mode' || event.payload?.remote === true)) {
+      mainWindow?.webContents.send('set:remote-mode', {
+        enabled: dispatcher!.remoteModeAllowed,
+      });
+      applyRemoteModeResize(dispatcher!.remoteModeAllowed);
+      bridgeService?.send({ type: 'remote-mode', enabled: dispatcher!.remoteModeAllowed });
+    }
+
+    return response;
+  });
 
   socketServer.start();
 
@@ -290,6 +385,19 @@ function initServices(): void {
   } else if (relayEnabled && !relayToken) {
     log('WARN', 'Cloud Relay enabled but no token configured (cloudRelayToken). Skipping.');
   }
+
+  // Install OpenClaw workstation skill + wctl (if OpenClaw is present)
+  installOpenClawSkills();
+
+  // Start OpenClaw bridge (notifications to Telegram/WhatsApp)
+  bridgeService = new BridgeService();
+  bridgeService.start();
+  bridgeService.send({
+    type: 'config',
+    notifyAlways: getNotifyAlways(),
+    notificationChannels: getNotificationChannels(),
+    remoteModeEnabled: dispatcher?.remoteModeAllowed ?? false,
+  });
 
   log('INFO', 'Services initialized');
 }
@@ -313,6 +421,13 @@ function sessionToInfo(session: TerminalSession): object {
 
 function handlePluginEvent(event: PluginEvent): void {
   log('INFO', 'Handling plugin event:', event.type);
+
+  // Bridge event file — append for external consumers (openclaw-bridge)
+  const eventsFile = path.join(os.homedir(), '.varie-workstation', 'events.jsonl');
+  fs.appendFile(eventsFile, JSON.stringify({
+    type: event.type, sessionId: event.sessionId, timestamp: event.timestamp,
+    context: event.context, payload: event.payload,
+  }) + '\n', () => {});
 
   switch (event.type) {
     case 'session_start':
@@ -471,6 +586,16 @@ function setupIpcHandlers(): void {
     // Could track focused session for dispatch purposes
   });
 
+  // Remote mode toggle (renderer → main)
+  ipcMain.on('toggle-remote-mode', (_event, enabled: boolean) => {
+    if (dispatcher) {
+      dispatcher.remoteModeAllowed = enabled;
+      applyRemoteModeResize(enabled);
+      bridgeService?.send({ type: 'remote-mode', enabled });
+      log('INFO', `Remote mode toggled via UI: ${enabled}`);
+    }
+  });
+
   // Write to terminal
   ipcMain.on('terminal:write', (_event, { sessionId, data }) => {
     sessionManager?.write(sessionId, data);
@@ -490,6 +615,65 @@ function setupIpcHandlers(): void {
     log('INFO', `IPC: config:setSkipPermissions ${enabled}`);
     setSkipPermissions(enabled);
     return enabled;
+  });
+
+  ipcMain.handle('config:getNotifyAlways', async () => {
+    return getNotifyAlways();
+  });
+
+  ipcMain.handle('config:setNotifyAlways', async (_event, enabled: boolean) => {
+    log('INFO', `IPC: config:setNotifyAlways ${enabled}`);
+    setNotifyAlways(enabled);
+    bridgeService?.send({ type: 'config', notifyAlways: enabled });
+    return enabled;
+  });
+
+  ipcMain.handle('config:getNotificationChannels', async () => {
+    return getNotificationChannels();
+  });
+
+  ipcMain.handle('config:setNotificationChannels', async (_event, channels: string) => {
+    log('INFO', `IPC: config:setNotificationChannels ${channels || '(all)'}`);
+    setNotificationChannels(channels);
+    bridgeService?.send({ type: 'config', notificationChannels: channels });
+    return channels;
+  });
+
+  ipcMain.handle('config:getAvailableChannels', async () => {
+    const openclawConfigPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+    if (!fs.existsSync(openclawConfigPath)) {
+      return { channels: [] };
+    }
+    try {
+      const config = JSON.parse(fs.readFileSync(openclawConfigPath, 'utf-8'));
+      const channelsObj = config.channels || {};
+      const result: Array<{ name: string; targets: string[] }> = [];
+      for (const [name, cfg] of Object.entries(channelsObj)) {
+        const c = cfg as Record<string, unknown>;
+        if (!c.enabled) continue;
+        // allowFrom may be inline (dmPolicy: "allowlist") or in credentials file (dmPolicy: "pairing")
+        let targets: string[] = [];
+        if (Array.isArray(c.allowFrom) && c.allowFrom.length > 0) {
+          targets = c.allowFrom as string[];
+        } else {
+          // Check credentials file (e.g. ~/.openclaw/credentials/telegram-default-allowFrom.json)
+          const credPath = path.join(os.homedir(), '.openclaw', 'credentials', `${name}-default-allowFrom.json`);
+          try {
+            if (fs.existsSync(credPath)) {
+              const cred = JSON.parse(fs.readFileSync(credPath, 'utf-8'));
+              // Credentials file is { version, allowFrom: [...] } or possibly a flat array
+              const ids = Array.isArray(cred) ? cred : (Array.isArray(cred.allowFrom) ? cred.allowFrom : []);
+              if (ids.length > 0) targets = ids.map(String);
+            }
+          } catch { /* ignore credential read errors */ }
+        }
+        result.push({ name, targets });
+      }
+      return { channels: result };
+    } catch (err) {
+      log('ERROR', 'Failed to read OpenClaw config:', err);
+      return { channels: [] };
+    }
   });
 
   // Native confirm dialog (shows app icon instead of generic Electron icon)
@@ -545,11 +729,13 @@ function setupIpcHandlers(): void {
 
     // Build start options from LLM settings
     const settings = loadLLMSettings();
+    const projectNames = loadAllProjectNames();
     voiceCapture.start({
       speechEngine: settings.speechEngine,
       locale: settings.speechLocale,
       directAudioRouting: settings.directAudioRouting,
       whisperKitModel: settings.whisperKitModel,
+      prompt: projectNames.length > 0 ? projectNames.join(', ') : undefined,
     });
   });
 
@@ -839,6 +1025,7 @@ app.on('before-quit', () => {
   managerState.stopAutoSave();
   managerState.saveState();
   relayClient?.destroy();
+  bridgeService?.stop();
   sessionManager?.closeAllSessions();
   socketServer?.stop();
 });

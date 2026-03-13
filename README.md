@@ -111,6 +111,103 @@ Workstation runs entirely on your machine. No telemetry, no analytics, no data s
 
 macOS will prompt for **Microphone** and **Speech Recognition** permissions on first use.
 
+## Agent Setup
+
+Control your Workstation sessions remotely from your phone via an AI agent (e.g. [OpenClaw](https://openclaw.ai)) and a messaging app (Telegram or WhatsApp).
+
+### Quick Start
+
+1. **Install OpenClaw** — `npm install -g openclaw` and start the gateway (`openclaw gateway start`)
+2. **Connect a messaging channel** — Set up Telegram or WhatsApp in your OpenClaw config (`~/.openclaw/openclaw.json`)
+3. **Restart the gateway** — `openclaw gateway restart` so it picks up the Workstation skill
+4. **Send a message** — From Telegram/WhatsApp, tell your agent something like *"check the status of my-app"*. Remote mode turns on automatically.
+
+The Workstation skill and CLI tool (`wctl`) are installed automatically every time the app launches. If you install OpenClaw after Workstation, just relaunch the app — it detects OpenClaw and registers the skill on next startup. No manual setup required.
+
+> **Note:** The notification bridge reads your OpenClaw channel config at launch. If you install or reconfigure OpenClaw (e.g. add Telegram/WhatsApp) after Workstation is already running, relaunch Workstation so the bridge picks up the new settings.
+
+### How It Works
+
+```
+You (Telegram/WhatsApp)
+  → OpenClaw agent (understands your intent)
+    → Workstation (matches to the right session by repo name)
+      → Claude Code (executes your request)
+        → Bridge (detects: finished, question, plan approval)
+          → OpenClaw (sends notification + screenshot to your phone)
+```
+
+Sessions are identified by their **repo/project name** (e.g. `varie-workstation`, `my-app`) as shown in the Workstation tab bar. You reference sessions naturally — *"run tests in my-app"* — and the agent routes to the matching session automatically.
+
+### Remote Mode
+
+**Remote mode** controls whether notifications are sent to your phone.
+
+- **Auto-enabled** — Turns on automatically when the agent dispatches or creates a session
+- **Manual toggle** — Click the `Remote` button in the top bar
+- Turning Remote mode off stops notifications (useful when you're back at your desk)
+
+### Notifications
+
+The built-in bridge watches your Claude Code sessions and notifies you when:
+
+| Event | What you receive |
+|-------|-----------------|
+| **Claude finished** | Terminal output summary + screenshot of the result |
+| **Plan approval** | Plan details with numbered options to approve/reject |
+| **Question** | The question text with selectable options |
+
+Screenshots are captured from the Workstation window using Electron's built-in page capture — no extra permissions needed.
+
+**Notification rules:**
+- **Remote mode ON** — Notifications sent (auto-enabled by agent commands)
+- **Remote mode OFF** — No notifications (default when working locally)
+- **"Always Send"** (Settings > Agent Notifications) — Always send, regardless of Remote mode
+
+**Choosing a notification channel:**
+
+Open Settings (gear icon) > Agent Notifications > **Notification Channel** dropdown. This lists all enabled messaging channels from your OpenClaw config (`~/.openclaw/openclaw.json`). Select which channel (Telegram or WhatsApp) should receive notifications. The dropdown auto-populates — if you add or remove channels in OpenClaw, relaunch Workstation to refresh the list.
+
+### Interacting from Your Phone
+
+**Checking active sessions:**
+- *"what sessions are running?"* — The agent lists all active sessions with their repo name, task, last active time, and what they're currently working on
+- This is a good first step if you're not sure which session to target
+
+**Sending commands:**
+- *"check the auth bug in my-app"* — Routes to the session matching "my-app" by repo name
+- *"create a new session for varie-workstation and fix the login bug"* — Creates a new session if none exists
+- You never need to know session IDs — just use the project/repo name shown in the tab bar
+
+**Answering questions and plan approvals:**
+- For simple choices (1, 2, 3…), reply with the option number
+- For complex or multi-line answers, say **"chat with claude: your detailed answer here"** — this types directly into the Claude Code input, bypassing the routing LLM so your answer is captured exactly
+
+**Stopping execution:**
+- Say **"escape"** or **"interrupt"** to stop the current Claude Code operation (equivalent to Escape or Ctrl+C in the terminal)
+
+### On-Demand Screenshots
+
+The agent can request screenshots at any time via the Workstation skill:
+
+| Mode | What it captures | Permission needed |
+|------|-----------------|-------------------|
+| **Session** (default) | The Workstation app page, focused on a specific session | None (Electron built-in) |
+| **Screen** | Your entire display or a specific monitor | macOS Screen Recording |
+
+To enable full-screen screenshots: **System Settings > Privacy & Security > Screen Recording > enable Workstation**, then restart the app.
+
+### Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| Agent doesn't know about Workstation skill | Restart the OpenClaw gateway — skills load at startup |
+| Skill still not found after restart | Relaunch Workstation so it re-registers the skill, then restart the gateway |
+| No notifications received | Check Remote mode is on (green `Remote` button in top bar) |
+| Screenshots missing from notifications | Notifications use Electron page capture (no permission needed). For full-screen screenshots, grant Screen Recording permission. |
+| Agent routes to wrong session | Be specific with the repo name: *"run tests in varie-workstation"* |
+| No notifications after setting up OpenClaw | Relaunch Workstation — the bridge reads OpenClaw channel config at startup |
+
 ## Skills Reference
 
 | Skill | Description |

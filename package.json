@@ -1,6 +1,6 @@
 {
   "name": "varie-workstation",
-  "version": "0.2.9",
+  "version": "0.3.2",
   "description": "Unified development environment for managing multiple Claude Code sessions",
   "main": "dist/main/index.js",
   "author": {
@@ -96,6 +96,14 @@
       {
         "from": "plugin",
         "to": "plugin"
+      },
+      {
+        "from": "bridge",
+        "to": "bridge"
+      },
+      {
+        "from": "openclaw",
+        "to": "openclaw"
       }
     ],
     "afterPack": "scripts/afterPack.js"
