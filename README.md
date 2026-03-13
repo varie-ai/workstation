@@ -17,6 +17,7 @@ Connect an AI agent like [OpenClaw](https://openclaw.ai) to dispatch commands, a
 
 - [Features](#features)
 - [Installation](#installation)
+- [macOS Permissions](#macos-permissions)
 - [Agent Integration (OpenClaw)](#agent-integration-openclaw)
   - [Quick Start](#agent-quick-start)
   - [How It Works](#how-it-works)
@@ -95,6 +96,23 @@ cd workstation
 npm install
 npm run dev
 ```
+
+---
+
+## macOS Permissions
+
+Workstation uses native macOS capabilities that require your explicit approval. macOS will show permission prompts on first use — here's what they are and why they're needed.
+
+| Permission | When prompted | Why it's needed |
+|-----------|---------------|-----------------|
+| **Accessibility** | First launch | Required for Workstation to manage terminal sessions and capture keyboard shortcuts (voice control hotkey, etc.) |
+| **Microphone** | First voice command | Voice control needs mic access for speech recognition. All audio is processed on-device. |
+| **Speech Recognition** | First voice command | Apple Speech engine requires this system permission. Audio stays on your Mac. |
+| **Screen Recording** | When using full-screen screenshots | Only needed if you want the agent to capture your entire display (not just the Workstation window). Session-mode screenshots use Electron's built-in capture and need no extra permission. |
+
+**To manage permissions:** System Settings > Privacy & Security > select the permission category > enable/disable Workstation.
+
+> **Why so many prompts?** macOS requires separate consent for each capability. Workstation asks only when a feature is actually used — you won't see a microphone prompt unless you activate voice control, and you won't see Screen Recording unless full-screen screenshots are requested.
 
 ---
 
