@@ -413,6 +413,14 @@ export class Dispatcher {
       // ISSUE-016: track readiness in background — dispatches will auto-wait
       this.readiness.register(sessionId, this.sessionManager.waitForClaudeReady(sessionId, 30000));
 
+      // ISSUE-018: Auto-register new project in projects.yaml (safe — deduplicates by path)
+      const hasClaudeMd = fs.existsSync(path.join(validatedPath, 'CLAUDE.md'));
+      const addedCount = syncDiscoveredRepos([{ name: repo, path: validatedPath, hasClaudeMd }]);
+      if (addedCount > 0) {
+        this.repoResolver.refresh();
+        log('INFO', `Auto-registered project ${repo} in projects.yaml`);
+      }
+
       return {
         status: 'ok',
         received: 'create_worker',

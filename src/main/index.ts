@@ -72,6 +72,19 @@ let voiceCapture: NativeVoiceCapture | null = null;
 let relayClient: RelayClient | null = null;
 let bridgeService: BridgeService | null = null;
 let savedWindowBounds: Electron.Rectangle | null = null;
+
+// Screenshot media directory — single source of truth for path construction.
+// Must match bridge/openclaw-bridge.js SCREENSHOT_DIR (bridge runs in a separate process).
+const SCREENSHOT_DIR = path.join(os.homedir(), '.openclaw', 'workspace', 'media');
+
+/**
+ * Generate a screenshot file path, ensuring the directory exists.
+ * @param prefix - filename prefix (e.g. 'screenshot', 'dispatch-screenshot')
+ */
+function screenshotPath(prefix = 'screenshot'): string {
+  if (!fs.existsSync(SCREENSHOT_DIR)) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+  return path.join(SCREENSHOT_DIR, `${prefix}-${Date.now()}.png`);
+}
 let isQuitting = false;  // Track if app is quitting (vs just hiding window)
 
 // ============================================================================
@@ -320,27 +333,68 @@ function initServices(): void {
     }
 
     // Screenshot: focus session + capture, or full screen capture
+    // ISSUE-017: supports --pages N for multi-page scrollback capture
     if (event.type === 'screenshot' && response.status === 'ok') {
       const mode = (event.payload as Record<string, unknown>)?.mode || 'session';
-      const screenshotDir = path.join(os.homedir(), '.openclaw', 'workspace', 'media');
-      if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
-      const outPath = path.join(screenshotDir, `screenshot-${Date.now()}.png`);
+      const pages = Math.max(1, Math.min(10, Number((event.payload as Record<string, unknown>)?.pages) || 1));
 
       if (mode === 'session') {
         const targetId = (event.payload as Record<string, unknown>)?.targetSessionId;
         mainWindow?.webContents.send('focus:session', { sessionId: targetId });
         // ISSUE-016: bumped from 500ms to 1000ms for slower terminal re-renders
         await new Promise((resolve) => setTimeout(resolve, 1000));
+
         try {
-          const image = await mainWindow?.webContents.capturePage();
-          if (image && !image.isEmpty()) {
-            fs.writeFileSync(outPath, image.toPNG());
-            response.imagePath = outPath;
+          if (pages === 1) {
+            // Single page — existing fast path
+            const outPath = screenshotPath('screenshot');
+            const image = await mainWindow?.webContents.capturePage();
+            if (image && !image.isEmpty()) {
+              fs.writeFileSync(outPath, image.toPNG());
+              response.imagePath = outPath;
+            }
+          } else {
+            // Multi-page: query terminal info, scroll through pages, capture each
+            const sendScrollCommand = (data: Record<string, unknown>): Promise<Record<string, unknown>> =>
+              new Promise((resolve) => {
+                ipcMain.once('screenshot:scroll-done', (_ev, result) => resolve(result || {}));
+                mainWindow?.webContents.send('screenshot:scroll', data);
+              });
+
+            // Get terminal dimensions
+            const info = await sendScrollCommand({ sessionId: targetId, action: 'info' });
+            const rows = (info.rows as number) || 40;
+            const bufferLength = (info.bufferLength as number) || rows;
+            const maxBaseY = Math.max(0, bufferLength - rows);
+            const imagePaths: string[] = [];
+
+            // Capture pages from top (oldest) to bottom (newest)
+            for (let i = pages - 1; i >= 0; i--) {
+              const scrollTo = Math.max(0, maxBaseY - i * rows);
+              await sendScrollCommand({ sessionId: targetId, action: 'scrollTo', line: scrollTo });
+              await new Promise((resolve) => setTimeout(resolve, 300));
+
+              const image = await mainWindow?.webContents.capturePage();
+              if (image && !image.isEmpty()) {
+                const outPath = screenshotPath('screenshot');
+                fs.writeFileSync(outPath, image.toPNG());
+                imagePaths.push(outPath);
+              }
+            }
+
+            // Restore scroll position
+            await sendScrollCommand({ sessionId: targetId, action: 'restore' });
+
+            if (imagePaths.length > 0) {
+              response.imagePath = imagePaths[imagePaths.length - 1]; // last page for backward compat
+              response.imagePaths = imagePaths; // all pages
+            }
           }
         } catch (err) {
           log('WARN', 'capturePage failed:', err instanceof Error ? err.message : err);
         }
       } else if (mode === 'screen') {
+        const outPath = screenshotPath('screenshot');
         const displayNum = String((event.payload as Record<string, unknown>)?.displayNumber || 1);
         try {
           execFileSync('/usr/sbin/screencapture', ['-D', displayNum, '-x', '-o', outPath], { timeout: 5000 });
@@ -351,6 +405,36 @@ function initServices(): void {
           log('WARN', 'Screen capture failed:', err instanceof Error ? err.message : err);
         }
       }
+    }
+
+    // ISSUE-017: Auto-screenshot after dispatch — fire-and-forget, non-blocking
+    // Captures the session viewport after a settle delay and sends via bridge notification.
+    if ((event.type === 'dispatch' || event.type === 'dispatch_answers') && response.status === 'ok') {
+      const targetId = response.targetSessionId as string;
+      const session = sessionManager?.getSession(targetId);
+      const label = session ? session.repo : targetId;
+      const AUTO_SCREENSHOT_DELAY_MS = 3000;
+
+      // Schedule async — don't block the dispatch response
+      (async () => {
+        try {
+          await new Promise((resolve) => setTimeout(resolve, AUTO_SCREENSHOT_DELAY_MS));
+          mainWindow?.webContents.send('focus:session', { sessionId: targetId });
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          const image = await mainWindow?.webContents.capturePage();
+          if (image && !image.isEmpty()) {
+            const outPath = screenshotPath('dispatch-screenshot');
+            fs.writeFileSync(outPath, image.toPNG());
+            bridgeService?.send({
+              type: 'send-image',
+              imagePath: outPath,
+              caption: `[${label}] After dispatch`,
+            });
+          }
+        } catch (err) {
+          log('WARN', 'Auto-screenshot after dispatch failed:', err instanceof Error ? err.message : err);
+        }
+      })();
     }
 
     // Auto-focus newly created worker session (only when created remotely via OpenClaw)
@@ -391,6 +475,29 @@ function initServices(): void {
 
   // Start OpenClaw bridge (notifications to Telegram/WhatsApp)
   bridgeService = new BridgeService();
+  bridgeService.onMessage(async (msg) => {
+    if (msg.type === 'request-screenshot') {
+      const projectPath = msg.projectPath as string;
+      const caption = (msg.caption as string) || 'Screenshot';
+      try {
+        // Resolve projectPath → Workstation session ID
+        const sessions = sessionManager?.getAllSessions() || [];
+        const match = sessions.find(s => s.repoPath === projectPath);
+        if (match) {
+          mainWindow?.webContents.send('focus:session', { sessionId: match.id });
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        const image = await mainWindow?.webContents.capturePage();
+        if (image && !image.isEmpty()) {
+          const outPath = screenshotPath('bridge-screenshot');
+          fs.writeFileSync(outPath, image.toPNG());
+          bridgeService?.send({ type: 'send-image', imagePath: outPath, caption });
+        }
+      } catch (err) {
+        log('WARN', 'Bridge screenshot request failed:', err instanceof Error ? err.message : err);
+      }
+    }
+  });
   bridgeService.start();
   bridgeService.send({
     type: 'config',

@@ -15,6 +15,7 @@ import { log } from './logger';
 
 export class BridgeService {
   private process: ChildProcess | null = null;
+  private messageHandler: ((msg: Record<string, unknown>) => void) | null = null;
 
   /**
    * Resolve the bridge script path (dev vs packaged).
@@ -81,6 +82,10 @@ export class BridgeService {
       this.process = null;
     });
 
+    this.process.on('message', (msg) => {
+      if (this.messageHandler) this.messageHandler(msg as Record<string, unknown>);
+    });
+
     this.process.on('error', (err) => {
       log('ERROR', 'Bridge process error:', err.message);
       this.process = null;
@@ -107,6 +112,13 @@ export class BridgeService {
     if (this.process?.connected) {
       this.process.send(message);
     }
+  }
+
+  /**
+   * Register a handler for IPC messages from the bridge process.
+   */
+  onMessage(handler: (msg: Record<string, unknown>) => void): void {
+    this.messageHandler = handler;
   }
 
   isRunning(): boolean {

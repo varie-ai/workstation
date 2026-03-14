@@ -3131,6 +3131,34 @@ function setupIPCHandlers(): void {
     enterFocusMode(sessionId);
   });
 
+  // ISSUE-017: Screenshot scroll — main process requests terminal info/scroll for multi-page capture
+  window.workstation.onScreenshotScroll((data) => {
+    const state = workers.get(data.sessionId);
+    if (!state) {
+      window.workstation.screenshotScrollDone({ error: 'session not found' });
+      return;
+    }
+
+    const term = state.terminal;
+    const buf = term.buffer.active;
+
+    if (data.action === 'info') {
+      window.workstation.screenshotScrollDone({
+        rows: term.rows,
+        bufferLength: buf.length,
+        baseY: buf.baseY,
+      });
+    } else if (data.action === 'scrollTo') {
+      term.scrollToLine(data.line ?? 0);
+      window.workstation.screenshotScrollDone({});
+    } else if (data.action === 'restore') {
+      term.scrollToBottom();
+      window.workstation.screenshotScrollDone({});
+    } else {
+      window.workstation.screenshotScrollDone({ error: 'unknown action' });
+    }
+  });
+
   // Remote mode sync (bridge or wctl changed remote mode)
   window.workstation.onSetRemoteMode((enabled) => {
     remoteModeActive = enabled;

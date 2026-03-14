@@ -75,6 +75,7 @@ export interface DispatchResponse {
   enabled?: boolean;
   // For screenshot
   imagePath?: string;
+  imagePaths?: string[];  // Multi-page screenshots (ISSUE-017)
 }
 
 export interface WorkerInfo {

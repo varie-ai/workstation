@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 // =============================================================================
 // Configuration
@@ -31,13 +31,17 @@ let CHANNELS = [];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB rotation threshold
 const DEBOUNCE_MS = 5000;               // Min 5s between notifications per session
 const POLL_INTERVAL_MS = 1000;           // Fallback poll interval
-const WINDOW_ID_CACHE_TTL = 60000;       // Cache screenshot window ID for 60s
 const ROTATION_CHECK_INTERVAL = 10 * 60 * 1000; // Check rotation every 10 min
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
 const MSG_SPLIT_CHARS = 2000;                  // Split long messages at ~2000 chars (safe margin for 4096 Telegram limit)
 const PENDING_PROMPTS_PATH = path.join(os.homedir(), '.openclaw', 'workspace', 'pending-prompts.json');
 const PENDING_PROMPT_TTL_MS = 10 * 60 * 1000;  // 10 min TTL for pending prompts
 const PIDFILE_PATH = path.join(os.homedir(), '.varie-workstation', 'bridge.pid');
+const LOG_DIR = path.join(os.homedir(), '.varie-workstation');
+const LOG_FILE = path.join(LOG_DIR, 'bridge.log');
+const LOG_MAX_SIZE = 2 * 1024 * 1024;          // 2MB — rotate when exceeded
+const LOG_TTL_DAYS = 7;                          // Delete rotated logs older than 7 days
+const LOG_ROTATE_PREFIX = 'bridge.log.';         // Rotated files: bridge.log.2026-03-14, etc.
 
 // =============================================================================
 // OpenClaw Channel Discovery
@@ -96,8 +100,6 @@ let lastReadPosition = 0;
 const sessionState = new Map();
 
 // Screenshot window ID cache
-let cachedWindowId = null;
-let windowIdCacheTs = 0;
 
 // Notification gating (controlled by Workstation main process via IPC)
 let remoteModeEnabled = false;
@@ -109,6 +111,15 @@ process.on('message', (msg) => {
   if (msg.type === 'remote-mode') {
     remoteModeEnabled = msg.enabled;
     log('Remote mode:', remoteModeEnabled ? 'ON' : 'OFF');
+  } else if (msg.type === 'send-image') {
+    // ISSUE-017: Auto-screenshot after dispatch — main process captured the image,
+    // we just need to send it via the notification channel.
+    const { imagePath, caption } = msg;
+    if (imagePath && fs.existsSync(imagePath)) {
+      sendImageNotification(imagePath, caption || 'Screenshot');
+    } else {
+      log('send-image: no valid imagePath');
+    }
   } else if (msg.type === 'config') {
     if (msg.notifyAlways !== undefined) notifyAlways = msg.notifyAlways;
     if (msg.remoteModeEnabled !== undefined) remoteModeEnabled = msg.remoteModeEnabled;
@@ -118,11 +129,65 @@ process.on('message', (msg) => {
 });
 
 // =============================================================================
-// Logging
+// Logging (persistent file + stdout, sync writes for crash safety)
 // =============================================================================
 
+let logEnabled = false;
+
+function initLogFile() {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    logEnabled = true;
+  } catch (err) {
+    console.error('Failed to init log dir:', err.message);
+  }
+}
+
 function log(...args) {
-  console.log(new Date().toISOString(), '[bridge]', ...args);
+  const line = new Date().toISOString() + ' [bridge] ' + args.map(a =>
+    typeof a === 'object' ? JSON.stringify(a) : String(a)
+  ).join(' ');
+  console.log(line);
+  if (logEnabled) {
+    try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
+  }
+}
+
+function rotateLogIfNeeded() {
+  try {
+    if (!fs.existsSync(LOG_FILE)) return;
+    const stats = fs.statSync(LOG_FILE);
+    if (stats.size <= LOG_MAX_SIZE) return;
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const rotatedPath = path.join(LOG_DIR, LOG_ROTATE_PREFIX + dateStr);
+    let dest = rotatedPath;
+    let counter = 1;
+    while (fs.existsSync(dest)) {
+      dest = rotatedPath + '.' + counter++;
+    }
+    fs.renameSync(LOG_FILE, dest);
+    log('Log rotated to', path.basename(dest));
+  } catch (err) {
+    console.error('Log rotation failed:', err.message);
+  }
+}
+
+function pruneOldLogs() {
+  try {
+    const now = Date.now();
+    const ttl = LOG_TTL_DAYS * 24 * 60 * 60 * 1000;
+    const files = fs.readdirSync(LOG_DIR);
+    for (const file of files) {
+      if (!file.startsWith(LOG_ROTATE_PREFIX)) continue;
+      const filePath = path.join(LOG_DIR, file);
+      const stats = fs.statSync(filePath);
+      if (now - stats.mtimeMs > ttl) {
+        fs.unlinkSync(filePath);
+        log('Pruned old log:', file);
+      }
+    }
+  } catch {}
 }
 
 // =============================================================================
@@ -337,32 +402,6 @@ function formatToolSummary(tools) {
   return `Tools: ${parts.join(', ')}`;
 }
 
-function resolveSessionId(projectPath) {
-  try {
-    const result = execFileSync('wctl', ['list'], {
-      encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
-    });
-    const data = JSON.parse(result);
-    const workers = data.workers || [];
-    const match = workers.find(w => w.repoPath === projectPath);
-    return match ? match.sessionId : null;
-  } catch (err) {
-    log('Failed to resolve session ID:', err.message);
-    return null;
-  }
-}
-
-function focusSession(projectPath) {
-  const wsSessionId = resolveSessionId(projectPath);
-  if (wsSessionId) {
-    try {
-      execFileSync('wctl', ['focus', wsSessionId], { timeout: 5000, stdio: 'pipe' });
-      log('Focused session:', wsSessionId);
-    } catch (err) {
-      log('Focus failed (proceeding with screenshot):', err.message);
-    }
-  }
-}
 
 function notifyStop(projectPath, state) {
   if (!checkDebounce(state)) return;
@@ -374,13 +413,12 @@ function notifyStop(projectPath, state) {
   // Reset tool accumulator
   state.tools.clear();
 
-  // Focus the session before screenshot for better mobile readability
-  focusSession(projectPath);
-
-  sendNotification(message);
+  // Send text immediately, request screenshot from main process (capturePage)
+  sendNotification(message, false);
+  requestScreenshot(projectPath, `[${state.project}] Claude finished`);
 }
 
-function notifyAttention(sessionId, state, type, payload) {
+function notifyAttention(projectPath, state, type, payload) {
   if (!checkDebounce(state)) return;
 
   let message;
@@ -401,8 +439,8 @@ function notifyAttention(sessionId, state, type, payload) {
     state.tools.clear();
   }
 
-  focusSession(sessionId);
-  sendNotification(message);
+  sendNotification(message, false);
+  requestScreenshot(projectPath, `[${state.project}] ${type}`);
 }
 
 function notifyPlanApproval(projectPath, state, payload) {
@@ -442,8 +480,8 @@ function notifyPlanApproval(projectPath, state, payload) {
     ]
   });
 
-  focusSession(projectPath);
   sendNotification(message);
+  requestScreenshot(projectPath, `[${state.project}] Plan review`);
 }
 
 function notifyQuestionPrompt(projectPath, state, payload) {
@@ -506,8 +544,8 @@ function notifyQuestionPrompt(projectPath, state, payload) {
     questions: questionsList
   });
 
-  focusSession(projectPath);
   sendNotification(message);
+  requestScreenshot(projectPath, `[${project}] Question`);
 }
 
 function readLatestPlan() {
@@ -601,87 +639,20 @@ function notifySimple(sessionId, state, message) {
   sendNotification(message, false); // No screenshot for simple events
 }
 
+/**
+ * Request a screenshot from the main Electron process via IPC.
+ * Main process will focus the session, call capturePage(), and send back
+ * a 'send-image' IPC message which triggers sendImageNotification().
+ */
+function requestScreenshot(projectPath, caption) {
+  if (process.send) {
+    process.send({ type: 'request-screenshot', projectPath, caption });
+  }
+}
+
 // =============================================================================
-// Screenshot Capture
+// Screenshot Cleanup (screenshots now captured by main process via IPC)
 // =============================================================================
-
-function getWorkstationWindowId() {
-  const now = Date.now();
-  if (cachedWindowId && (now - windowIdCacheTs) < WINDOW_ID_CACHE_TTL) {
-    return cachedWindowId;
-  }
-
-  // Use swift to get CGWindowID via CoreGraphics (no pip dependencies needed)
-  try {
-    const swiftCode = `
-import Cocoa
-let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
-for w in windows {
-    let owner = w[kCGWindowOwnerName as String] as? String ?? ""
-    if owner == "Workstation" {
-        print(w[kCGWindowNumber as String] as? Int ?? 0)
-        break
-    }
-}`;
-    const result = execSync(`swift -e '${swiftCode.replace(/'/g, "'\\''")}'`,
-      { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-
-    const id = parseInt(result, 10);
-    if (id > 0) {
-      cachedWindowId = id;
-      windowIdCacheTs = now;
-      log('Cached window ID:', id);
-      return id;
-    }
-  } catch (err) {
-    log('Failed to get window ID via swift:', err.message);
-  }
-
-  return null;
-}
-
-function screenshotPath() {
-  return path.join(SCREENSHOT_DIR, `bridge-screenshot-${Date.now()}.png`);
-}
-
-function captureScreenshot() {
-  const outPath = screenshotPath();
-
-  // Approach 1: capture by CGWindowID (works even if partially occluded)
-  const windowId = getWorkstationWindowId();
-  if (windowId) {
-    try {
-      execSync(`/usr/sbin/screencapture -l${windowId} -x -o "${outPath}"`, { timeout: 5000 });
-      if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
-        return outPath;
-      }
-    } catch (err) {
-      log('Window ID capture failed:', err.message);
-      cachedWindowId = null; // Invalidate cache
-    }
-  }
-
-  // Approach 2: capture by region via AppleScript bounds (coerce to text to avoid comma issues)
-  try {
-    const boundsRaw = execSync(
-      `osascript -e 'tell application "System Events" to tell process "Workstation"' ` +
-      `-e 'set p to position of window 1' ` +
-      `-e 'set s to size of window 1' ` +
-      `-e 'return ((item 1 of p) as text) & "," & ((item 2 of p) as text) & "," & ((item 1 of s) as text) & "," & ((item 2 of s) as text)' ` +
-      `-e 'end tell'`,
-      { encoding: 'utf-8', timeout: 3000 }
-    ).trim();
-    log('AppleScript bounds:', boundsRaw);
-    execSync(`/usr/sbin/screencapture -R${boundsRaw} -x "${outPath}"`, { timeout: 5000 });
-    if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
-      return outPath;
-    }
-  } catch (err) {
-    log('Region capture failed:', err.message);
-  }
-
-  return null; // Text-only fallback
-}
 
 function cleanupOldScreenshots() {
   try {
@@ -713,13 +684,13 @@ function trySendOnChannel(channel, message, mediaPath) {
   execFileSync('openclaw', args, { timeout: 15000, stdio: 'pipe' });
 }
 
-function sendNotification(message, withScreenshot = true) {
+function sendNotification(message, withScreenshot = false) {
   if (!notifyAlways && !remoteModeEnabled) {
     log('Notification suppressed (remote mode off):', message.split('\n')[0]);
     return;
   }
 
-  const mediaPath = withScreenshot ? captureScreenshot() : null;
+  const mediaPath = null; // Screenshots now handled via IPC to main process (capturePage)
   const preview = message.split('\n')[0];
   const parts = splitMessage(message);
 
@@ -796,6 +767,51 @@ function sendNotification(message, withScreenshot = true) {
   log('All channels failed for:', preview);
 }
 
+/**
+ * ISSUE-017: Send a pre-captured image via the notification channel.
+ * Used for auto-screenshot after dispatch (image captured by main process via capturePage).
+ * Respects remote mode gating and channel selection, same as sendNotification.
+ */
+function sendImageNotification(imagePath, caption) {
+  if (!notifyAlways && !remoteModeEnabled) {
+    log('Image notification suppressed (remote mode off):', caption);
+    return;
+  }
+
+  let channelsToUse = CHANNELS;
+  if (notificationChannelsFilter) {
+    const match = CHANNELS.find(ch => `${ch.name}:${ch.target}` === notificationChannelsFilter);
+    if (match) {
+      channelsToUse = [match];
+    } else {
+      channelsToUse = CHANNELS.slice(0, 1);
+    }
+  } else {
+    channelsToUse = CHANNELS.slice(0, 1);
+  }
+
+  for (const channel of channelsToUse) {
+    try {
+      trySendOnChannel(channel, caption, imagePath);
+      log(`Sent image [${channel.name}]:`, caption);
+      return;
+    } catch (err) {
+      const errMsg = err.stderr ? err.stderr.toString().trim() : err.message;
+      log(`Image send failed [${channel.name}]:`, errMsg);
+      // Try text-only fallback
+      try {
+        trySendOnChannel(channel, caption, null);
+        log(`Text fallback sent [${channel.name}]:`, caption);
+        return;
+      } catch (err2) {
+        log(`Text fallback also failed [${channel.name}]:`, err2.message);
+      }
+    }
+  }
+
+  log('All channels failed for image:', caption);
+}
+
 // =============================================================================
 // File Rotation
 // =============================================================================
@@ -853,6 +869,12 @@ function acquirePidLock() {
 }
 
 function main() {
+  // Init persistent log file first (so even pidlock messages are logged)
+  initLogFile();
+
+  // Acquire pidfile lock (exits if another instance running)
+  acquirePidLock();
+
   // Load notification channels from OpenClaw config
   CHANNELS = loadChannels();
   if (CHANNELS.length === 0) {
@@ -861,8 +883,6 @@ function main() {
     log('then relaunch Workstation to enable notifications.');
     process.exit(0);
   }
-
-  acquirePidLock();
 
   log('OpenClaw-Workstation Bridge starting...');
   log('Events file:', EVENTS_PATH);
@@ -874,7 +894,7 @@ function main() {
   // Initial cleanup + periodic (rotation + screenshot TTL)
   checkRotation();
   cleanupOldScreenshots();
-  setInterval(() => { checkRotation(); cleanupOldScreenshots(); cleanExpiredPrompts(); }, ROTATION_CHECK_INTERVAL);
+  setInterval(() => { checkRotation(); cleanupOldScreenshots(); cleanExpiredPrompts(); rotateLogIfNeeded(); pruneOldLogs(); }, ROTATION_CHECK_INTERVAL);
 
   // Wait for events file if it doesn't exist yet
   if (!fs.existsSync(EVENTS_PATH)) {

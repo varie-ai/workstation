@@ -186,7 +186,12 @@ The agent can request screenshots at any time:
 | Mode | What it captures | Permission needed |
 |------|-----------------|-------------------|
 | **Session** (default) | The Workstation app page, focused on a specific session | None (Electron built-in) |
+| **Session + pages** | Multiple pages of terminal scrollback history | None (Electron built-in) |
 | **Screen** | Your entire display or a specific monitor | macOS Screen Recording |
+
+**Multi-page scrollback:** Use `--pages N` to capture N pages of terminal output (max 10). Pages are captured oldest-first, so page 1 shows the earliest visible content and the last page shows the current viewport. Useful when Claude produces long output that scrolls past the visible area.
+
+**Auto-screenshot after dispatch:** When you send a command to a session from your phone, Workstation automatically captures a screenshot after a short delay and sends it back — so you can see what was delivered without manually requesting a screenshot.
 
 To enable full-screen screenshots: **System Settings > Privacy & Security > Screen Recording > enable Workstation**, then restart the app.
 

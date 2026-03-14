@@ -163,6 +163,9 @@ function formatHuman(command, jsonStr) {
       return `Sent Enter to session ${data.targetSessionId || 'unknown'}`;
 
     case 'screenshot':
+      if (data.imagePaths && data.imagePaths.length > 1) {
+        return `Screenshot saved (${data.imagePaths.length} pages):\n${data.imagePaths.map((p, i) => `  Page ${i + 1}: ${p}`).join('\n')}`;
+      }
       if (data.imagePath) return `Screenshot saved: ${data.imagePath}`;
       return `Screenshot failed (no image captured)`;
 
@@ -443,7 +446,7 @@ async function main() {
     case 'screenshot': {
       cmdKey = 'screenshot';
       if (args.length < 2) {
-        console.log(JSON.stringify({ status: 'error', message: 'Usage: wctl screenshot <session-id> | --screen [display-num]' }));
+        console.log(JSON.stringify({ status: 'error', message: 'Usage: wctl screenshot <session-id> [--pages N] | --screen [display-num]' }));
         process.exit(1);
       }
       if (args[1] === '--screen') {
@@ -454,14 +457,21 @@ async function main() {
           payload: { mode: 'screen', displayNumber: parseInt(args[2], 10) || 1 }
         });
       } else {
+        // Parse --pages N from remaining args
+        let pages = 1;
+        const pagesIdx = args.indexOf('--pages');
+        if (pagesIdx !== -1 && args[pagesIdx + 1]) {
+          pages = Math.max(1, Math.min(10, parseInt(args[pagesIdx + 1], 10) || 1));
+        }
         json = JSON.stringify({
           type: 'screenshot',
           sessionId,
           timestamp: Date.now(),
-          payload: { mode: 'session', targetSessionId: args[1] }
+          payload: { mode: 'session', targetSessionId: args[1], pages }
         });
       }
-      timeout = 10000;
+      // Multi-page needs more time (300ms render + capture per page)
+      timeout = 10000 + (parseInt(args[args.indexOf('--pages') + 1], 10) || 0) * 1000;
       break;
     }
 
@@ -517,7 +527,7 @@ Commands:
   escape <id>                         Send Escape key to session (cancel prompt/menu)
   interrupt <id>                      Send Ctrl+C to session (stop running process)
   enter <id>                          Send Enter key to session (confirm/dismiss)
-  screenshot <id>                     Screenshot a session (focus + capture)
+  screenshot <id> [--pages N]          Screenshot a session (focus + capture). --pages N captures N pages of scrollback (max 10)
   screenshot --screen [display-num]   Screenshot full display (1=main, 2=secondary)
   set-remote-mode on|off              Enable/disable remote mode (bridge auto-focus)
   discover [path]                     Scan for project repos
@@ -544,7 +554,22 @@ Examples:
 
   try {
     const response = await sendCommand(json, timeout);
-    console.log(human ? formatHuman(cmdKey, response) : response);
+    // For multi-page screenshots, always use explicit per-page format so agents
+    // can't accidentally use the single imagePath for all pages.
+    if (!human && cmdKey === 'screenshot') {
+      try {
+        const data = JSON.parse(response);
+        if (data.status === 'ok' && data.imagePaths && data.imagePaths.length > 1) {
+          const lines = [`Screenshot captured ${data.imagePaths.length} pages:`];
+          data.imagePaths.forEach((p, i) => lines.push(`Page ${i + 1}/${data.imagePaths.length}: ${p}`));
+          console.log(lines.join('\n'));
+        } else {
+          console.log(response);
+        }
+      } catch { console.log(response); }
+    } else {
+      console.log(human ? formatHuman(cmdKey, response) : response);
+    }
   } catch (err) {
     const errJson = JSON.stringify({ status: 'error', message: err.message });
     console.log(human ? formatHuman(cmdKey, errJson) : errJson);

@@ -82,14 +82,34 @@ If project not found in discover results, ask the user for the repo path.
 | `wctl list --human` | List sessions (readable, for user) |
 | `wctl dispatch <id> "<msg>"` | Send message to existing session |
 | `wctl dispatch-answers <id> <a1> <a2>...` | Send multi-question answers. Use `next:N` for multi-select |
-| `wctl create <repo> <path> [task]` | Create new session |
+| `wctl create <repo> <path> [task]` | Create new session (auto-registers in project index) |
 | `wctl escape <id>` | Send Escape key (cancel prompt/menu) |
 | `wctl interrupt <id>` | Send Ctrl+C (stop running process) |
 | `wctl enter <id>` | Send Enter key (confirm/dismiss) |
-| `wctl screenshot <id>` | Screenshot a session (focus + capture) |
+| `wctl screenshot <id> [--pages N]` | Screenshot a session. `--pages N` captures N pages of scrollback (max 10) |
 | `wctl screenshot --screen` | Screenshot main display |
 | `wctl set-remote-mode on\|off` | Enable/disable remote mode (bridge auto-focus for screenshots) |
 | `wctl discover` | Scan for project repos |
+
+## Creating New Projects
+
+To start a brand new project that doesn't exist yet:
+
+```bash
+wctl create <project-name> ~/workplace/projects/<project-name> [task-label]
+# Example: wctl create experiment_testing ~/workplace/projects/experiment_testing initial-exploration
+```
+
+The optional `task-label` is a short description shown in `wctl list` (e.g. "initial-exploration", "build-api", "fix-bug"). If omitted, the session shows no task label.
+
+This will:
+1. Create the directory if it doesn't exist
+2. Start a new Claude Code session in that directory
+3. Auto-register the project in the Workstation project index
+
+**Default path convention:** `~/workplace/projects/<project-name>`
+
+**When to use:** User says "start a new project", "create an experiment", "I want to try something new", or names a project that doesn't exist in `wctl list`.
 
 ## Session Control (Escape / Interrupt)
 
@@ -108,24 +128,40 @@ When the user wants to stop, cancel, or interrupt a session:
 To show the user what a session looks like:
 
 ```bash
-# 1. Capture the session
+# 1. Capture the session (current viewport)
 wctl screenshot <session-id>
 # Returns: { "status": "ok", "imagePath": "/path/to/screenshot.png" }
 
-# 2. Send to user using the built-in message tool
+# Capture multiple pages of scrollback (e.g., 3 pages of history)
+wctl screenshot <session-id> --pages 3
+# Returns plain text with one path per line:
+#   Screenshot captured 3 pages:
+#   Page 1/3: /path/to/page1.png
+#   Page 2/3: /path/to/page2.png
+#   Page 3/3: /path/to/page3.png
+
+# 2. Send EACH image path to the user (one message per page)
 ```
 
-To deliver the screenshot, use your built-in `message` tool (not bash) with `action: "send"` and `mediaUrl` pointing to the captured image path. The message tool is session-bound — it automatically targets the channel and user you're currently chatting with. No need to specify channel or target manually.
+`--pages N` captures N pages starting from the oldest visible content down to the current viewport. Use `--pages 2` or `--pages 3` when the user wants to see more output that scrolled past.
 
-If the `message` tool is unavailable, fall back to the CLI:
+To deliver screenshots, use your built-in `message` tool with `action: "send"` and `mediaUrl` set to the image file path. This sends the actual image, not the path text.
+
+**IMPORTANT — multi-page delivery:** Each page has a DIFFERENT image path. You MUST call the `message` tool once per page with `mediaUrl` set to that page's path. Never send paths as text — always use `mediaUrl` so the user receives the actual image.
+
+Example for 2 pages:
+1. wctl output: `Page 1/2: /path/page1.png` → message tool: `{ "action": "send", "mediaUrl": "/path/page1.png" }`
+2. wctl output: `Page 2/2: /path/page2.png` → message tool: `{ "action": "send", "mediaUrl": "/path/page2.png" }`
+
+If the `message` tool is unavailable, fall back to the CLI (one command per page):
 ```bash
-openclaw message send --media <imagePath> --channel <channel> --target <target>
+openclaw message send --media /path/page1.png
+openclaw message send --media /path/page2.png
 ```
-Replace `<channel>` and `<target>` with the values from the current conversation (e.g., `telegram` + the user's chat ID, or `whatsapp` + their phone number).
 
 For full screen (e.g., to see Chrome, other apps): `wctl screenshot --screen`
 
-**When to use:** User says "show me", "screenshot", "what does it look like", "what's happening in session X".
+**When to use:** User says "show me", "screenshot", "what does it look like", "what's happening in session X". Use `--pages` when user says "show me the full output", "scroll up", or wants to see more than the current view.
 
 **Always** send the image via `openclaw message send --media` after capturing — wctl only saves the file locally.
 

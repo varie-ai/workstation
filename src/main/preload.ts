@@ -228,6 +228,12 @@ contextBridge.exposeInMainWorld('workstation', {
 
   toggleRemoteMode: (enabled: boolean) => ipcRenderer.send('toggle-remote-mode', enabled),
 
+  // ISSUE-017: Screenshot scroll — main process requests terminal scroll for multi-page capture
+  onScreenshotScroll: (callback: (data: { sessionId: string; action: string; line?: number }) => void) => {
+    ipcRenderer.on('screenshot:scroll', (_event, data) => callback(data));
+  },
+  screenshotScrollDone: (result: Record<string, unknown>) => ipcRenderer.send('screenshot:scroll-done', result),
+
   // Window visibility (ISSUE-040)
   onWindowShow: (callback: () => void) => {
     ipcRenderer.on('window:show', () => {
