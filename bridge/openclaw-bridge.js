@@ -645,6 +645,7 @@ function notifySimple(sessionId, state, message) {
  * a 'send-image' IPC message which triggers sendImageNotification().
  */
 function requestScreenshot(projectPath, caption) {
+  if (!notifyAlways && !remoteModeEnabled) return; // Same gate as sendNotification
   if (process.send) {
     process.send({ type: 'request-screenshot', projectPath, caption });
   }
