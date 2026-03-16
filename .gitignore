@@ -29,6 +29,7 @@ local-marketplace/
 # Screenshots - only keep README-referenced assets, ignore raw recordings
 screenshots/*.mov
 screenshots/*.mp4
+!screenshots/openclaw-quick-demo.mp4
 
 # Session transcripts (large files)
 *.txt

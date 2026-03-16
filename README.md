@@ -2,12 +2,7 @@
 
 Control Claude Code from your phone. An agentic coding orchestrator with AI agent integration, voice control, and multi-session management.
 
-<img src="screenshots/demo.gif" width="100%" alt="Workstation demo — voice-controlled multi-session routing" />
-
-<p>
-  <img src="screenshots/work-report.png" width="390" alt="Work report — cross-project status for standups and team syncs" />
-  <img src="screenshots/voice-control-settings.png" width="390" alt="Voice control settings — smart routing with LLM providers" />
-</p>
+<video src="screenshots/openclaw-quick-demo.mp4" width="100%" autoplay loop muted playsinline></video>
 
 Connect an AI agent like [OpenClaw](https://openclaw.ai) to dispatch commands, approve plans, and monitor progress from Telegram or WhatsApp — while your Mac codes autonomously. Pair with native voice control for a completely hands-free coding experience.
 
