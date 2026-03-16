@@ -192,22 +192,26 @@ If multiple prompts are pending, match the user's message to the most relevant o
 
 ### Step 2: Map intent to response
 
-**Plan approval (4 options):**
+**Plan approval — ALWAYS dispatch the OPTION NUMBER, never free text:**
+
+The plan approval prompt is a numbered menu in Claude Code. Free text will be misinterpreted as the "Other" option and may APPROVE the plan instead of rejecting it.
+
 | User says | Dispatch |
 |---|---|
 | "1", "clear context", "bypass all" | `wctl dispatch <id> "1"` |
 | "2", "bypass permissions", "yes bypass" | `wctl dispatch <id> "2"` |
 | "3", "approve", "yes", "go ahead", "lgtm", "manually approve" | `wctl dispatch <id> "3"` |
-| "reject", "no", feedback like "change X to Y" | **Two steps:** `wctl dispatch <id> "4"` then wait 2s then `wctl dispatch <id> "<their feedback>"` |
+| "reject", "no", "don't do that", any rejection | `wctl dispatch <id> "4"` then optionally send feedback (see below) |
 
 Default to **option 3** ("yes, manually approve edits") when user says generic approval like "yes", "approve", "go ahead".
 
-**Important for option 4 (feedback/reject):** This is a two-step process. First dispatch "4" to select the text input option, wait 2 seconds for the text prompt to appear, then dispatch the feedback text. Example:
+**CRITICAL for option 4 (reject/feedback):** This is a two-step process. You MUST dispatch `"4"` first (the number only), wait for the text prompt to appear, then dispatch their feedback. Never combine rejection + feedback into a single dispatch — the PTY is a numbered menu, not a text field.
 ```bash
 wctl dispatch abc123 "4"
 sleep 2
 wctl dispatch abc123 "don't modify the database schema"
 ```
+If the user just says "reject" or "no" with no specific feedback, dispatch `"4"` only — no second step needed.
 
 **Question — ALWAYS dispatch the OPTION NUMBER, never text:**
 
@@ -343,7 +347,7 @@ Without Workstation running, the skill will report "daemon not running" for all 
 - `openclaw message send` routes media through your configured OpenClaw channel (Telegram/WhatsApp). Images traverse the channel provider's servers but are only sent to the requesting user's conversation.
 
 ### Input Validation
-- The skill maps user intent to option numbers before dispatching — free text is never injected into PTY commands without validation.
+- The skill maps user intent to option numbers before dispatching — plan approvals and questions MUST use the option number (1-4), never descriptive text like "reject: reason" which gets misinterpreted as "Other" input.
 - The "Chat about this" fallback is used whenever intent mapping is uncertain, preventing wrong selections.
 
 ## External Endpoints
